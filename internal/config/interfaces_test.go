@@ -958,7 +958,7 @@ func TestPerRepoConfig_AuthorizationOwnersFile_NoFallback(t *testing.T) {
 
 	t.Run("does not fall through to parent", func(t *testing.T) {
 		parent := &perRepoConfig{
-			Authorization: &AuthorizationConfig{OwnersFile: true},
+			Authorization: []AuthorizationProvider{{Provider: "owners_file"}},
 		}
 		child := &perRepoConfig{parent: parent}
 		assert.False(t, child.AuthorizationOwnersFile())
@@ -966,7 +966,7 @@ func TestPerRepoConfig_AuthorizationOwnersFile_NoFallback(t *testing.T) {
 
 	t.Run("returns true when set locally", func(t *testing.T) {
 		cfg := &perRepoConfig{
-			Authorization: &AuthorizationConfig{OwnersFile: true},
+			Authorization: []AuthorizationProvider{{Provider: "owners_file"}},
 		}
 		assert.True(t, cfg.AuthorizationOwnersFile())
 	})
