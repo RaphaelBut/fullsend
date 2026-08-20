@@ -70,7 +70,7 @@ func resolveActorLogin(w *world.World, actor string) (string, error) {
 
 func commitFile(w *world.World, path, message, content string) error {
 	if err := w.SCM.CommitFile(context.Background(),
-		w.RepoOwner, w.RepoName,
+		w.Org, w.RepoName,
 		path, message, []byte(content)); err != nil {
 		return fmt.Errorf("committing %s: %w", path, err)
 	}
@@ -123,7 +123,7 @@ func givenOwnersAliasesFile(w *world.World, alias, actor string) error {
 func givenOwnersAuthEnabled(w *world.World) error {
 	cfgPath := filepath.Join(".fullsend", "config.yaml")
 	cfgData, err := w.SCM.GetFileContent(context.Background(),
-		w.RepoOwner, w.RepoName, cfgPath)
+		w.Org, w.RepoName, cfgPath)
 	if err != nil {
 		return fmt.Errorf("reading config: %w", err)
 	}
@@ -137,7 +137,7 @@ func givenOwnersAuthEnabled(w *world.World) error {
 		return err
 	}
 	if err := w.SCM.CommitFile(context.Background(),
-		w.RepoOwner, w.RepoName,
+		w.Org, w.RepoName,
 		cfgPath, "behaviour: enable OWNERS authorization",
 		merged); err != nil {
 		return fmt.Errorf("updating config: %w", err)
@@ -273,7 +273,7 @@ func waitForDispatchRun(w *world.World) (*forge.WorkflowRun, error) {
 func disableOwnersAuth(w *world.World) error {
 	cfgPath := filepath.Join(".fullsend", "config.yaml")
 	cfgData, err := w.SCM.GetFileContent(context.Background(),
-		w.RepoOwner, w.RepoName, cfgPath)
+		w.Org, w.RepoName, cfgPath)
 	if err != nil {
 		return fmt.Errorf("reading config: %w", err)
 	}
@@ -287,7 +287,7 @@ func disableOwnersAuth(w *world.World) error {
 		return err
 	}
 	if err := w.SCM.CommitFile(context.Background(),
-		w.RepoOwner, w.RepoName,
+		w.Org, w.RepoName,
 		cfgPath, "behaviour: disable OWNERS authorization",
 		merged); err != nil {
 		return fmt.Errorf("updating config: %w", err)
@@ -297,7 +297,7 @@ func disableOwnersAuth(w *world.World) error {
 
 func cleanupOwnersAuth(w *world.World) {
 	ctx := context.Background()
-	owner := w.RepoOwner
+	owner := w.Org
 	repo := w.RepoName
 
 	if err := disableOwnersAuth(w); err != nil {
