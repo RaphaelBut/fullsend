@@ -1210,7 +1210,7 @@ func runGitHubSet(ctx context.Context, client forge.Client, printer *ui.Printer,
 		return fmt.Errorf("unknown config key %q; valid keys: %s", key, strings.Join(validKeys, ", "))
 	}
 
-	if strings.TrimSpace(value) == "" {
+	if key == openAIRepoSecretName && strings.TrimSpace(value) == "" {
 		return fmt.Errorf("value for %s must not be empty", key)
 	}
 

@@ -351,7 +351,7 @@ func resolveOpenAICredential(ctx context.Context, getenv func(string) string, fr
 	// OIDC endpoint) or where nothing else is available; a developer's
 	// OPENAI_API_KEY on a laptop is not overridden by the repository's
 	// CI configuration.
-	configApplies := !fromConfig.IsZero() && (getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "" || getenv(openAIStaticKeyEnv) == "")
+	configApplies := !fromConfig.IsZero() && (getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "" || strings.TrimSpace(getenv(openAIStaticKeyEnv)) == "")
 	configIgnored := !fromConfig.IsZero() && !configApplies
 	if audience == "" && identityProviderID == "" && serviceAccountID == "" && configApplies {
 		if missing := fromConfig.Missing(); len(missing) > 0 {
@@ -411,7 +411,7 @@ func resolveOpenAICredential(ctx context.Context, getenv func(string) string, fr
 		return cred, nil
 	}
 
-	if key := getenv(openAIStaticKeyEnv); key != "" {
+	if key := strings.TrimSpace(getenv(openAIStaticKeyEnv)); key != "" {
 		detail := openAIStaticKeyEnv + " from the runner environment"
 		if configIgnored {
 			detail += " (inference.openai in config.yaml not used: no GitHub OIDC endpoint here)"

@@ -472,8 +472,8 @@ func TestReusableDispatchFixInstructionNormalizesCRLF(t *testing.T) {
 
 // TestOpenAIAPIKeySecretThreading validates that the opt-in static OpenAI
 // key (#7295) is forwarded by every scaffold shim that already forwards
-// FULLSEND_GCP_PROJECT_ID. reusable-*.yml declarations and env injection
-// are a maintainer follow-up: the agent cannot push .github/workflows/.
+// FULLSEND_GCP_PROJECT_ID, and that every reusable-*.yml callee it calls
+// declares the secret and exports it as OPENAI_API_KEY (#7295, 333ad967e).
 func TestOpenAIAPIKeySecretThreading(t *testing.T) {
 	forward := "FULLSEND_OPENAI_API_KEY: ${{ secrets.FULLSEND_OPENAI_API_KEY }}"
 	cases := []struct {
@@ -494,6 +494,49 @@ func TestOpenAIAPIKeySecretThreading(t *testing.T) {
 				"%s must forward %s", tc.name, "FULLSEND_OPENAI_API_KEY")
 		})
 	}
+
+	declaration := "FULLSEND_OPENAI_API_KEY:\n        required: false"
+	export := "OPENAI_API_KEY: ${{ secrets.FULLSEND_OPENAI_API_KEY }}"
+
+	// Standalone reusable-{stage}.yml files have exactly one job/one agent
+	// step each, so a whole-file substring check is unambiguous.
+	standaloneStages := []string{"triage", "code", "review", "fix", "retro", "prioritize"}
+	for _, stage := range standaloneStages {
+		t.Run("reusable-"+stage+".yml", func(t *testing.T) {
+			content := string(loadRepoFile(fmt.Sprintf(".github/workflows/reusable-%s.yml", stage))(t))
+			assert.Contains(t, content, declaration,
+				"reusable-%s.yml must declare FULLSEND_OPENAI_API_KEY (required: false) under on.workflow_call.secrets", stage)
+			assert.Contains(t, content, export,
+				"reusable-%s.yml must export FULLSEND_OPENAI_API_KEY as OPENAI_API_KEY", stage)
+		})
+	}
+
+	// reusable-dispatch.yml inlines seven jobs in one file (TestOpenAIVariableForwarding
+	// above uses the same step markers): a whole-file substring check would still pass
+	// if any single step's export were dropped or mistyped, since the other six would
+	// remain. Scope the export check to each step's own section.
+	t.Run("reusable-dispatch.yml", func(t *testing.T) {
+		content := string(loadRepoFile(".github/workflows/reusable-dispatch.yml")(t))
+		assert.Contains(t, content, declaration,
+			"reusable-dispatch.yml must declare FULLSEND_OPENAI_API_KEY (required: false) under on.workflow_call.secrets")
+
+		stepMarkers := []string{
+			"Run triage agent",
+			"Run code agent",
+			"Run review agent",
+			"Run fix agent",
+			"Run retro agent",
+			"Run prioritize agent",
+			"Run harness agent",
+		}
+		for _, marker := range stepMarkers {
+			t.Run(marker, func(t *testing.T) {
+				section := extractStepSection(t, content, marker)
+				assert.Contains(t, section, export,
+					"%q step must export FULLSEND_OPENAI_API_KEY as OPENAI_API_KEY", marker)
+			})
+		}
+	})
 }
 
 // TestOTELHeadersSecretThreading validates that the optional OTLP headers

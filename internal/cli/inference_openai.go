@@ -877,16 +877,6 @@ func resolveOpenAIStatusSources(fullsendDir string) (openAIStatusSource, error) 
 		return s, nil
 	}
 
-	// The run path ignores the committed block where an exchange is
-	// impossible and a static key is present — a developer's
-	// OPENAI_API_KEY is not overridden by the repository's CI
-	// configuration (run_openai.go, configApplies). Reporting the block
-	// as the source there would describe a run that will not happen.
-	if os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL") == "" && strings.TrimSpace(os.Getenv(openAIStaticKeyEnv)) != "" {
-		s.Source = "static key"
-		return s, nil
-	}
-
 	writer, err := config.LoadConfigWriter(fullsendDir, config.LoadOpts{MissingOK: true})
 	if err != nil {
 		// A malformed or unreadable config must not read as "nothing
@@ -901,6 +891,28 @@ func resolveOpenAIStatusSources(fullsendDir string) (openAIStatusSource, error) 
 		return s, fmt.Errorf("%s contains an org-mode config; OpenAI WIF enrolment is per-repo", fullsendDir)
 	}
 	cfgIDs := perRepo.ConfigInferenceOpenAI().Trimmed()
+
+	staticKey := strings.TrimSpace(os.Getenv(openAIStaticKeyEnv))
+	// Mirrors resolveOpenAICredential's configApplies (run_openai.go): the
+	// committed block applies where an exchange is possible (a GitHub OIDC
+	// endpoint, CI or not) or where nothing else is available. A static
+	// key present without an OIDC endpoint is not overridden by the
+	// committed block — a developer's, or a CI static-key run's,
+	// OPENAI_API_KEY wins.
+	configApplies := !cfgIDs.IsZero() && (os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "" || staticKey == "")
+	if configApplies {
+		s.Source = "config.yaml"
+		s.Audience, s.AudienceSource = cfgIDs.Audience, "config.yaml"
+		s.IdentityProviderID, s.IDPSource = cfgIDs.IdentityProviderID, "config.yaml"
+		s.ServiceAccountID, s.SASource = cfgIDs.ServiceAccountID, "config.yaml"
+		return s, nil
+	}
+
+	if staticKey != "" {
+		s.Source = "static key"
+		return s, nil
+	}
+
 	s.Source = "config.yaml"
 	s.Audience, s.AudienceSource = cfgIDs.Audience, "config.yaml"
 	s.IdentityProviderID, s.IDPSource = cfgIDs.IdentityProviderID, "config.yaml"
@@ -935,8 +947,13 @@ func runInferenceOpenAIStatus(cmd *cobra.Command, printer *ui.Printer, repo, ful
 
 	if ids.IsZero() {
 		if sources.Source == "static key" {
-			printer.StepInfo(openAIStaticKeyEnv + " is set and this is not a GitHub Actions job, so a run here would use that key and ignore inference.openai — the same rule fullsend run applies")
-			printer.StepInfo("In CI the runner warns that a static OPENAI_API_KEY is in use; Workload Identity Federation remains preferred")
+			if os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "" {
+				printer.StepInfo(openAIStaticKeyEnv + " is set and the WIF trio is not, so a run here would use that key and ignore inference.openai — the same rule fullsend run applies")
+				printer.StepInfo("In CI the runner warns that a static OPENAI_API_KEY is in use; Workload Identity Federation remains preferred")
+			} else {
+				printer.StepInfo(openAIStaticKeyEnv + " is set and this is not a GitHub Actions job, so a run here would use that key and ignore inference.openai — the same rule fullsend run applies")
+				printer.StepInfo("Workload Identity Federation remains preferred")
+			}
 			return nil
 		}
 		printer.StepFail("No OpenAI credential configured")

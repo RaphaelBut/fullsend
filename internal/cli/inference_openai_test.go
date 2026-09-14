@@ -678,6 +678,38 @@ func TestRunInferenceOpenAIStatus_StaticKey(t *testing.T) {
 	assert.NotContains(t, out, "sk-local-developer-key", "the key itself must never be printed")
 }
 
+func TestRunInferenceOpenAIStatus_StaticKeyInGitHubActions(t *testing.T) {
+	// The exact CI static-key case this repo secret exists to support:
+	// an OIDC endpoint is present (a real GitHub Actions job), the WIF
+	// trio is unset, config.yaml is empty, and OPENAI_API_KEY is set.
+	// resolveOpenAICredential succeeds on the static key here (it does
+	// not gate on ACTIONS_ID_TOKEN_REQUEST_URL); status must agree,
+	// not report "no credential configured".
+	dir := t.TempDir()
+	fullsendDir := filepath.Join(dir, ".fullsend")
+
+	t.Setenv(openAIAudienceEnv, "")
+	t.Setenv(openAIIdentityProviderIDEnv, "")
+	t.Setenv(openAIServiceAccountIDEnv, "")
+	t.Setenv(openAIStaticKeyEnv, "sk-ci-static-key")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://oidc.example/token")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "token")
+
+	var buf bytes.Buffer
+	cmd := newRootCmd()
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"inference", "openai", "status", "acme/widget",
+		"--fullsend-dir", fullsendDir})
+	err := cmd.Execute()
+	require.NoError(t, err)
+	out := buf.String()
+	assert.Contains(t, out, openAIStaticKeyEnv+" is set")
+	assert.Contains(t, out, "In CI the runner warns that a static OPENAI_API_KEY is in use")
+	assert.Contains(t, out, "Workload Identity Federation remains preferred")
+	assert.NotContains(t, out, "No OpenAI credential configured")
+	assert.NotContains(t, out, "sk-ci-static-key", "the key itself must never be printed")
+}
+
 func TestRunInferenceOpenAIStatus_PartialConfig(t *testing.T) {
 	dir := t.TempDir()
 	fullsendDir := filepath.Join(dir, ".fullsend")
