@@ -47,6 +47,10 @@ const (
 	openAIIdentityProviderIDEnv = "FULLSEND_OPENAI_IDENTITY_PROVIDER_ID"
 	openAIServiceAccountIDEnv   = "FULLSEND_OPENAI_SERVICE_ACCOUNT_ID"
 	openAIStaticKeyEnv          = "OPENAI_API_KEY"
+	// openAIRepoSecretName is the GitHub Actions secret workflows export as
+	// OPENAI_API_KEY. Named FULLSEND_* so an unrelated repository secret is
+	// never picked up by accident (#7295).
+	openAIRepoSecretName = "FULLSEND_OPENAI_API_KEY"
 )
 
 // openAIExchange is the WIF exchange; tests substitute it.
