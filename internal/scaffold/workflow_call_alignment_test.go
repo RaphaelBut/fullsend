@@ -276,17 +276,7 @@ func TestWorkflowCallInputAlignment(t *testing.T) {
 			}
 
 			// Check: every secret the caller passes actually exists in the reusable workflow.
-			// pendingOptionalSecrets are forwarded by scaffold callers in this
-			// change (#7295) ahead of the reusable-*.yml declaration, which a
-			// maintainer must add — the agent cannot push .github/workflows/.
-			// Remove an entry once the matching reusable workflow declares it.
-			pendingOptionalSecrets := map[string]bool{
-				"FULLSEND_OPENAI_API_KEY": true,
-			}
 			for name := range job.Secrets {
-				if pendingOptionalSecrets[name] {
-					continue
-				}
 				assert.Contains(t, reusable.On.WorkflowCall.Secrets, name,
 					"caller passes secret %q which is not declared in %s", name, match)
 			}
