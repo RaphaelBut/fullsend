@@ -42,14 +42,12 @@ already follow the run-scoped provider pattern
 
 ## Options
 
-- **Rely on the minted App token.** Insufficient by construction for packages
-  owned by another org; works only same-org, where `${GH_TOKEN}` already serves.
-- **Export the Actions token into the sandbox environment.** The real value
-  would land in transcripts and artifacts and could be replayed at any
-  allowlisted host. Rejected.
-- **A user-supplied PAT.** No passthrough exists for repo secrets, and it would
-  add a long-lived personal credential where the job already holds a
-  short-lived one. Rejected.
+- **Rely on the minted App token.** Same-org only, where `${GH_TOKEN}` already
+  serves.
+- **Export the Actions token into the sandbox environment.** Replayable at any
+  allowlisted host and lands in transcripts. Rejected.
+- **A user-supplied PAT.** No secret passthrough exists, and it would add a
+  long-lived credential where the job already holds a short-lived one. Rejected.
 
 ## Decision
 
@@ -65,11 +63,13 @@ App token.**
    site (`runner_env`, `env.runner`, `env.sandbox`, `host_files`,
    `validation_loop.schema`) refuses it, pre/post/validation child environments
    strip it, `env.sandbox` cannot name it, and redaction knows its value. Only
-   provider credential expansion reads it, so the sandbox holds a placeholder.
+   provider credential expansion reads it; the sandbox environment holds the
+   placeholder, resolved by the proxy solely at the bound hosts.
 3. A repo opts in with a provider (`type: fullsend-github-packages`) whose
-   profile binds the placeholder to `npm.pkg.github.com:443` and allowlists
-   `pkg-npm.githubusercontent.com:443` without a credential, both read-only and
-   enforced. The proxy rejects the placeholder at any other host, so
+   profile binds the placeholder to `npm.pkg.github.com:443` and
+   `pkg-npm.githubusercontent.com:443` (the tarball CDN, which ignores it and
+   serves pre-signed URLs), both read-only and enforced. The proxy rejects the
+   placeholder at any other host (`credential_endpoint_mismatch`), so
    `api.github.com` and `github.com` keep resolving the App token, and the
    post-script keeps pushing with `PUSH_TOKEN`.
 4. Nothing ships by default. The provider, profile and `~/.npmrc` line live in
@@ -82,6 +82,13 @@ App token.**
 - The token's write permissions are unreachable from the sandbox: only the two
   registry hosts resolve the placeholder, both read-only, and forge writes still
   go through the post-script with the App token.
+- The value is readable by the agent: OpenShell resolves a static placeholder in
+  the header, path or query of a request to a bound host, and the registry
+  echoes unknown package names in 404 bodies (verified on OpenShell 0.0.116).
+  This is the free-text-endpoint exposure [ADR 0025](0025-provider-credential-delivery-for-sandboxed-agents.md)
+  accepts for every static credential and adds no capability: a literal token is
+  still read-only at the forge hosts and revoked when the job ends. Header-only
+  placement is an OpenShell roadmap item, tracked as follow-on.
 - GitLab and local runs are unchanged, because nothing is preserved outside
   Actions.
 - Provider definitions read from the trusted ref may now reference one more

@@ -225,9 +225,9 @@ binaries:
   - "**/yarn"
 ```
 
-`npm.pkg.github.com` is credential-bound. `pkg-npm.githubusercontent.com` is
-not: the tarball redirect carries a pre-signed URL, so no credential is
-attached. Scoped package names (`@org/pkg`) put a `%2F`-encoded slash in the
+Both hosts are credential-bound, because OpenShell binds every static
+credential in a profile to all of the profile's endpoints; the tarball redirect
+carries a pre-signed URL, so the CDN simply ignores it. Scoped package names (`@org/pkg`) put a `%2F`-encoded slash in the
 `npm.pkg.github.com` request path; if pulling scoped packages through this
 profile fails with a routing or path-matching error, check your pinned
 OpenShell version's endpoint field reference for an encoded-slash option
@@ -241,8 +241,15 @@ before assuming the profile itself is wrong.
 
 Keep `expand: false` on the `host_files` entry. The file holds no secret;
 pnpm still expands `${GITHUB_TOKEN}` in user-level `~/.npmrc`. Inside the
-sandbox that value is the provider placeholder, not the real token. Project
-`.npmrc` files are not expanded by pnpm ≥ 10.34.2
+sandbox that value is the provider placeholder; the proxy resolves it only on
+the two registry hosts and answers `credential_endpoint_mismatch` anywhere
+else. Treat the value itself as readable by the agent all the same: OpenShell
+resolves a static placeholder wherever it appears in a request to a bound
+host, and the registry echoes unknown package names in its 404 body. That is
+the standard exposure of any static OpenShell credential
+([ADR 0025](../../ADRs/0025-provider-credential-delivery-for-sandboxed-agents.md));
+the token stays read-only through the proxy and is revoked when the job ends.
+Project `.npmrc` files are not expanded by pnpm ≥ 10.34.2
 ([GHSA-3qhv-2rgh-x77r](https://github.com/advisories/GHSA-3qhv-2rgh-x77r)).
 
 **`.fullsend/harness/code.yaml`** (and the same overlay for `fix.yaml`):
