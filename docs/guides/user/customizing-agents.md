@@ -212,6 +212,7 @@ endpoints:
     protocol: rest
     access: read-only
     enforcement: enforce
+    allow_encoded_slash: true
   - host: pkg-npm.githubusercontent.com
     port: 443
     protocol: rest
@@ -227,11 +228,11 @@ binaries:
 
 Both hosts are credential-bound, because OpenShell binds every static
 credential in a profile to all of the profile's endpoints; the tarball redirect
-carries a pre-signed URL, so the CDN simply ignores it. Scoped package names (`@org/pkg`) put a `%2F`-encoded slash in the
-`npm.pkg.github.com` request path; if pulling scoped packages through this
-profile fails with a routing or path-matching error, check your pinned
-OpenShell version's endpoint field reference for an encoded-slash option
-before assuming the profile itself is wrong.
+carries a pre-signed URL, so the CDN simply ignores it. Scoped package names
+(`@org/pkg`) put a `%2F`-encoded slash in the `npm.pkg.github.com` metadata
+request; `allow_encoded_slash: true` is required for that request to pass L7
+parsing (without it the proxy closes the connection; verified on OpenShell
+0.0.116, whose policy schema documents the field for npm scoped packages).
 
 **`.fullsend/env/npmrc-github-packages`:**
 
