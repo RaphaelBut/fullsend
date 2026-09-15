@@ -68,9 +68,12 @@ const (
 	// of requiredSecrets/requiredSecretsForForge — a repository with no
 	// OpenAI WIF and no static key configured is not unhealthy. Uninstall
 	// deletes it if present so a torn-down repo doesn't keep a long-lived
-	// key around. fullsend creates and owns this one via `fullsend github
-	// set`, unlike GitLab's unprefixed OPENAI_API_KEY CI/CD variable,
-	// which fullsend never creates or forwards — see gitlabUninstallSecrets
+	// key around. It's a dedicated, FULLSEND_-namespaced secret (via
+	// `fullsend github set` or pasted directly into GitHub settings)
+	// fullsend can safely delete regardless of who created it — unlike
+	// GitLab's unprefixed, potentially-shared OPENAI_API_KEY CI/CD
+	// variable, which fullsend never forwards and does not delete on
+	// uninstall — see gitlabUninstallSecrets
 	// in internal/repos/uninstall.go for why that one is deliberately not
 	// deleted.
 	SecretOpenAIAPIKey = "FULLSEND_OPENAI_API_KEY"

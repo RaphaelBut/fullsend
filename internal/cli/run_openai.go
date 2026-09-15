@@ -428,7 +428,7 @@ func resolveOpenAICredential(ctx context.Context, getenv func(string) string, fr
 		}, nil
 	}
 
-	return openAICredential{}, fmt.Errorf("no OpenAI credential: set %s, %s and %s (or inference.openai in config.yaml) for Workload Identity Federation (the job needs `permissions: id-token: write`), or %s in the runner environment for a local run or via the %s repository secret in CI",
+	return openAICredential{}, fmt.Errorf("no OpenAI credential: set %s, %s and %s (or inference.openai in config.yaml) for Workload Identity Federation (the job needs `permissions: id-token: write`), or set %s in the runner environment for a local run, a masked GitLab CI/CD variable, or the %s GitHub repository secret",
 		openAIAudienceEnv, openAIIdentityProviderIDEnv, openAIServiceAccountIDEnv, openAIStaticKeyEnv, openAIRepoSecretName)
 }
 

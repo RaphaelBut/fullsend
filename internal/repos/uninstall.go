@@ -40,14 +40,16 @@ var gitlabUninstallVars = []string{
 }
 
 // gitlabUninstallSecrets intentionally does NOT include the OpenAI static
-// key. Unlike FULLSEND_OPENAI_API_KEY on GitHub — which fullsend creates
-// and owns via `fullsend github set` — GitLab's OPENAI_API_KEY CI/CD
-// variable is never created or forwarded by fullsend (per
+// key. Unlike FULLSEND_OPENAI_API_KEY on GitHub — a dedicated,
+// FULLSEND_-namespaced secret fullsend can safely delete regardless of
+// whether it was set via `fullsend github set` or pasted directly into
+// GitHub settings — GitLab's OPENAI_API_KEY CI/CD variable is never
+// forwarded by fullsend and shares no such namespace (per
 // docs/guides/infrastructure/openai-workload-identity.md's GitLab CI
 // note: it "already works" as a plain CI/CD variable, set by whoever
-// manages the project, not by fullsend). Deleting an unprefixed variable
-// fullsend never provisioned risks destroying a credential it doesn't
-// own, possibly used by other jobs in the same project.
+// manages the project). Deleting an unprefixed, potentially-shared
+// variable on uninstall risks destroying a credential unrelated jobs in
+// the same project depend on.
 var gitlabUninstallSecrets = []string{
 	forge.SecretGCPProjectID,
 	forge.SecretGCPWIFProvider,

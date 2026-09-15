@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -888,15 +889,18 @@ func TestUninstallSecretsForForge_GitHub_DeletesOptInOpenAIKey(t *testing.T) {
 }
 
 func TestUninstallSecretsForForge_GitLab_DoesNotDeleteOpenAIKey(t *testing.T) {
-	// Unlike GitHub's FULLSEND_OPENAI_API_KEY, which fullsend creates and
-	// owns via `fullsend github set`, GitLab's unprefixed OPENAI_API_KEY
-	// CI/CD variable is never created or forwarded by fullsend (it "already
-	// works" as a plain variable the project owner manages). Deleting it
-	// on uninstall would risk destroying a credential fullsend never
-	// provisioned, possibly shared with other CI jobs in the project.
-	for _, s := range UninstallSecretsForForge(ForgeGitLab) {
-		if s == "OPENAI_API_KEY" {
-			t.Errorf("UninstallSecretsForForge(GitLab) must not include OPENAI_API_KEY — fullsend does not own that variable")
-		}
+	// Unlike GitHub's FULLSEND_OPENAI_API_KEY — a dedicated,
+	// FULLSEND_-namespaced secret fullsend can safely delete regardless of
+	// how it was set — GitLab's unprefixed OPENAI_API_KEY CI/CD variable is
+	// never forwarded by fullsend and shares no such namespace (it "already
+	// works" as a plain variable the project owner manages). Deleting it on
+	// uninstall would risk destroying a credential unrelated jobs in the
+	// same project depend on. Assert the exact list, not just this one
+	// key's absence, so an unrelated future addition can't silently widen
+	// what GitLab uninstall deletes.
+	got := UninstallSecretsForForge(ForgeGitLab)
+	want := []string{forge.SecretGCPProjectID, forge.SecretGCPWIFProvider}
+	if !slices.Equal(got, want) {
+		t.Errorf("UninstallSecretsForForge(GitLab) = %v, want %v", got, want)
 	}
 }
