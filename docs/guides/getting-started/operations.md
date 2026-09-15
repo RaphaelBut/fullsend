@@ -80,7 +80,7 @@ To remove fullsend from a single repository:
 
 > **Note:** During install, fullsend sets `workflow.auto_cancel.on_new_commit: none` when no existing value is present but does not overwrite an existing value. This only applies when the repo's `.gitlab-ci.yml` already contains a `workflow:` block — when no `workflow:` block exists, fullsend leaves it absent so push-triggered pipelines are not disrupted. Repos with `on_new_commit: interruptible` (or other non-`none` values) may experience agent pipeline cancellations because fullsend requires `on_new_commit: none` for reliable agent runs. If you see unexpected pipeline cancellations, set `on_new_commit: none` in your `.gitlab-ci.yml` workflow block.
 
-2. Delete all CI/CD variables prefixed with `FULLSEND_`, plus `OPENAI_API_KEY` if you set it (it is not `FULLSEND_`-prefixed, so it is easy to miss here — `fullsend repos uninstall` above already deletes it via the API)
+2. Delete all CI/CD variables prefixed with `FULLSEND_`. If you set `OPENAI_API_KEY` for the static-key route, delete it yourself too if you want it gone — fullsend never created it (it is a plain CI/CD variable, not `FULLSEND_`-prefixed) and does not delete it as part of uninstall
 3. Revoke the `fullsend-bot` project access token (Settings → Access Tokens)
 4. Delete fullsend pipeline schedules (`fullsend slash poll` and `fullsend event poll`)
 

@@ -428,8 +428,8 @@ func resolveOpenAICredential(ctx context.Context, getenv func(string) string, fr
 		}, nil
 	}
 
-	return openAICredential{}, fmt.Errorf("no OpenAI credential: set %s, %s and %s (or inference.openai in config.yaml) for Workload Identity Federation (the job needs `permissions: id-token: write`), or %s in the runner environment for a local run",
-		openAIAudienceEnv, openAIIdentityProviderIDEnv, openAIServiceAccountIDEnv, openAIStaticKeyEnv)
+	return openAICredential{}, fmt.Errorf("no OpenAI credential: set %s, %s and %s (or inference.openai in config.yaml) for Workload Identity Federation (the job needs `permissions: id-token: write`), or %s in the runner environment for a local run or via the %s repository secret in CI",
+		openAIAudienceEnv, openAIIdentityProviderIDEnv, openAIServiceAccountIDEnv, openAIStaticKeyEnv, openAIRepoSecretName)
 }
 
 // runScopedProviderName derives the provider instance name for this run

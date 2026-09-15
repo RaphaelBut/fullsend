@@ -64,13 +64,16 @@ const (
 	// signing is on by default; see poll.EnsureDispatchSecret.
 	SecretDispatch = "FULLSEND_DISPATCH_SECRET"
 
-	// Opt-in OpenAI static-key secrets (ADR 0092): never part of
-	// requiredSecrets/requiredSecretsForForge — a repository with no
+	// Opt-in OpenAI static-key secret (ADR 0092), GitHub only: never part
+	// of requiredSecrets/requiredSecretsForForge — a repository with no
 	// OpenAI WIF and no static key configured is not unhealthy. Uninstall
-	// deletes these if present so a torn-down repo doesn't keep a
-	// long-lived key around.
-	SecretOpenAIAPIKey       = "FULLSEND_OPENAI_API_KEY"
-	SecretGitLabOpenAIAPIKey = "OPENAI_API_KEY"
+	// deletes it if present so a torn-down repo doesn't keep a long-lived
+	// key around. fullsend creates and owns this one via `fullsend github
+	// set`, unlike GitLab's unprefixed OPENAI_API_KEY CI/CD variable,
+	// which fullsend never creates or forwards — see gitlabUninstallSecrets
+	// in internal/repos/uninstall.go for why that one is deliberately not
+	// deleted.
+	SecretOpenAIAPIKey = "FULLSEND_OPENAI_API_KEY"
 
 	// Legacy uninstall-only variables — GitLab.
 	VarLegacyBotTokenSecret = "FULLSEND_BOT_TOKEN_SECRET"

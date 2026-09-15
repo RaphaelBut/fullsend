@@ -887,21 +887,16 @@ func TestUninstallSecretsForForge_GitHub_DeletesOptInOpenAIKey(t *testing.T) {
 	}
 }
 
-func TestUninstallSecretsForForge_GitLab_DeletesOptInOpenAIKey(t *testing.T) {
-	secrets := UninstallSecretsForForge(ForgeGitLab)
-	found := false
-	for _, s := range secrets {
-		if s == forge.SecretGitLabOpenAIAPIKey {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("UninstallSecretsForForge(GitLab) = %v, want it to include %s so a torn-down repo doesn't keep the opt-in key", secrets, forge.SecretGitLabOpenAIAPIKey)
-	}
-
-	for _, s := range requiredSecretsForForge(ForgeGitLab) {
-		if s == forge.SecretGitLabOpenAIAPIKey {
-			t.Errorf("requiredSecretsForForge(GitLab) must not include the opt-in %s", forge.SecretGitLabOpenAIAPIKey)
+func TestUninstallSecretsForForge_GitLab_DoesNotDeleteOpenAIKey(t *testing.T) {
+	// Unlike GitHub's FULLSEND_OPENAI_API_KEY, which fullsend creates and
+	// owns via `fullsend github set`, GitLab's unprefixed OPENAI_API_KEY
+	// CI/CD variable is never created or forwarded by fullsend (it "already
+	// works" as a plain variable the project owner manages). Deleting it
+	// on uninstall would risk destroying a credential fullsend never
+	// provisioned, possibly shared with other CI jobs in the project.
+	for _, s := range UninstallSecretsForForge(ForgeGitLab) {
+		if s == "OPENAI_API_KEY" {
+			t.Errorf("UninstallSecretsForForge(GitLab) must not include OPENAI_API_KEY — fullsend does not own that variable")
 		}
 	}
 }
