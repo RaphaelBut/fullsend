@@ -5548,7 +5548,10 @@ func mintAgentToken(ctx context.Context, role, mintURL, forgePlatform string, pr
 // forgePlatform controls platform-specific env vars: PUSH_TOKEN_SOURCE is
 // set to "github-app" for GitHub and "pat" for GitLab.
 // On GitHub Actions the pre-mint GH_TOKEN is copied to FULLSEND_WORKFLOW_TOKEN
-// for provider credential expansion (#6649); cleanup unsets it.
+// for provider credential expansion (#6649); cleanup unsets it. Remint-safe:
+// if FULLSEND_WORKFLOW_TOKEN is already set (remintAgentTokenForPostScript's
+// second call, after the first mint replaced GH_TOKEN with the App token),
+// the copy is skipped so the already-preserved workflow token is left alone.
 func mintAgentTokenAtLevel(ctx context.Context, role, mintURL, forgePlatform, level string, printer *ui.Printer) (bool, func(), error) {
 	if mintURL == "" || role == "" {
 		return false, func() {}, nil
@@ -5594,26 +5597,40 @@ func mintAgentTokenAtLevel(ctx context.Context, role, mintURL, forgePlatform, le
 	// Actions leave a caller-set value alone and never derive one from a
 	// local PAT (#6649).
 	if os.Getenv("GITHUB_ACTIONS") == "true" {
-		preMint := originals["GH_TOKEN"]
-		switch {
-		case preMint == "":
-			// A future caller could override the workflow's github_token
-			// input to empty; fail loud instead of silently skipping the
-			// preserve step (#6649).
-			printer.StepWarn("GITHUB_ACTIONS is set but no pre-mint GH_TOKEN was found; FULLSEND_WORKFLOW_TOKEN will not be preserved for provider credentials")
-		case !mintTokenPattern.MatchString(preMint):
-			// Gate the same as result.Token below before it reaches
-			// Setenv/add-mask/RegisterRuntimeSecret: fail closed rather
-			// than trust an unvalidated value (#6649).
-			printer.StepWarn("pre-mint GH_TOKEN has an unexpected format; FULLSEND_WORKFLOW_TOKEN will not be preserved for provider credentials")
-		default:
-			if v, ok := os.LookupEnv(workflowTokenEnv); ok {
-				originals[workflowTokenEnv] = v
+		// A non-empty existing value means either a prior mintAgentToken
+		// call in this process already preserved the real workflow token
+		// (remintAgentTokenForPostScript's second call, after the first
+		// mint replaced GH_TOKEN with the App installation token — at that
+		// point originals["GH_TOKEN"] is the App token, not the real
+		// pre-mint value, so copying it here would clobber the already-
+		// preserved token) or a caller deliberately set one. Either way,
+		// leave it alone; this call's cleanup must not touch it either, so
+		// it stays untouched in envVars/originals. Empty-string values
+		// (test fixtures resetting state with a blank sentinel, or a var
+		// that is merely declared but never populated) are treated as
+		// "not preserved yet" so the normal preserve path below still runs.
+		// See review finding on run.go:5357 (#6649).
+		existing, alreadyPreserved := os.LookupEnv(workflowTokenEnv)
+		alreadyPreserved = alreadyPreserved && existing != ""
+		if !alreadyPreserved {
+			preMint := originals["GH_TOKEN"]
+			switch {
+			case preMint == "":
+				// A future caller could override the workflow's github_token
+				// input to empty; fail loud instead of silently skipping the
+				// preserve step (#6649).
+				printer.StepWarn("GITHUB_ACTIONS is set but no pre-mint GH_TOKEN was found; FULLSEND_WORKFLOW_TOKEN will not be preserved for provider credentials")
+			case !mintTokenPattern.MatchString(preMint):
+				// Gate the same as result.Token below before it reaches
+				// Setenv/add-mask/RegisterRuntimeSecret: fail closed rather
+				// than trust an unvalidated value (#6649).
+				printer.StepWarn("pre-mint GH_TOKEN has an unexpected format; FULLSEND_WORKFLOW_TOKEN will not be preserved for provider credentials")
+			default:
+				os.Setenv(workflowTokenEnv, preMint)
+				envVars = append(envVars, workflowTokenEnv)
+				security.RegisterRuntimeSecret(preMint)
+				fmt.Fprintf(os.Stderr, "::add-mask::%s\n", preMint)
 			}
-			os.Setenv(workflowTokenEnv, preMint)
-			envVars = append(envVars, workflowTokenEnv)
-			security.RegisterRuntimeSecret(preMint)
-			fmt.Fprintf(os.Stderr, "::add-mask::%s\n", preMint)
 		}
 	}
 	os.Setenv("GH_TOKEN", result.Token)

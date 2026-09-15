@@ -5838,8 +5838,8 @@ func TestMintAgentToken_PreservesWorkflowTokenInActions(t *testing.T) {
 	origMint := statusMintToken
 	defer func() { statusMintToken = origMint }()
 
-	const workflowToken = "ghs_actions_workflow_token_xx"
-	const mintedToken = "ghs_coder_minted_token_xx"
+	const workflowToken = "ghs_workflow_token_aaa"
+	const mintedToken = "ghs_minted_token_bbb"
 
 	statusMintToken = func(_ context.Context, req mintclient.MintRequest) (*mintclient.MintResult, error) {
 		assert.Equal(t, "coder", req.Role)
@@ -6004,6 +6004,64 @@ func TestMintAgentToken_WarnsWhenPreMintTokenMalformed(t *testing.T) {
 	assert.Contains(t, buf.String(), "unexpected format")
 	assert.Equal(t, "", os.Getenv(workflowTokenEnv), "malformed pre-mint token must not be preserved")
 	assert.NotContains(t, stderrBuf.String(), "::add-mask::not a valid token", "malformed token must not reach add-mask")
+}
+
+// TestMintAgentToken_RemintDoesNotClobberWorkflowToken covers the remint
+// path: remintAgentTokenForPostScript calls mintAgentToken a second time
+// after the first mint already replaced GH_TOKEN with the App installation
+// token. Before the fix, the second call's Actions preserve branch copied
+// that App token (mistaken for a fresh pre-mint value) over the workflow
+// token the first call had already preserved, since childScriptEnv strips
+// the var this wasn't user-visible in shipped code paths, but any reader of
+// the raw process env between remint and remintCleanup would observe the
+// wrong token (review finding: logic-error, run.go:5357).
+func TestMintAgentToken_RemintDoesNotClobberWorkflowToken(t *testing.T) {
+	origMint := statusMintToken
+	defer func() { statusMintToken = origMint }()
+
+	const realWorkflowToken = "ghs_real_workflow_token_ccc"
+	const firstAppToken = "ghs_first_app_token_ddd"
+	const secondAppToken = "ghs_second_app_token_eee"
+
+	var calls int
+	statusMintToken = func(_ context.Context, _ mintclient.MintRequest) (*mintclient.MintResult, error) {
+		calls++
+		if calls == 1 {
+			return &mintclient.MintResult{Token: firstAppToken, ExpiresAt: "2026-06-15T12:00:00Z"}, nil
+		}
+		return &mintclient.MintResult{Token: secondAppToken, ExpiresAt: "2026-06-15T13:00:00Z"}, nil
+	}
+
+	t.Setenv("REPO_FULL_NAME", "org/my-repo")
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("GH_TOKEN", realWorkflowToken)
+	t.Setenv("PUSH_TOKEN", "")
+	t.Setenv("PUSH_TOKEN_SOURCE", "")
+	t.Setenv(workflowTokenEnv, "")
+
+	printer := ui.New(io.Discard)
+	minted, cleanup, err := mintAgentToken(context.Background(), "coder", "https://mint.example.com", "", printer)
+	require.NoError(t, err)
+	require.True(t, minted)
+	require.Equal(t, 1, calls)
+	require.Equal(t, firstAppToken, os.Getenv("GH_TOKEN"))
+	require.Equal(t, realWorkflowToken, os.Getenv(workflowTokenEnv), "first mint preserves the real pre-mint token")
+
+	h := &harness.Harness{Role: "coder"}
+	remintCleanup, remintErr := remintAgentTokenForPostScript(context.Background(), h, "https://mint.example.com", "", "write", printer)
+	require.NoError(t, remintErr)
+	assert.Equal(t, 2, calls)
+	assert.Equal(t, secondAppToken, os.Getenv("GH_TOKEN"), "remint replaces GH_TOKEN with the freshly minted token")
+	assert.Equal(t, realWorkflowToken, os.Getenv(workflowTokenEnv), "remint must not clobber the already-preserved workflow token with the just-replaced App token")
+
+	// Under LIFO, remintCleanup runs before the first mint's own cleanup.
+	remintCleanup()
+	assert.Equal(t, firstAppToken, os.Getenv("GH_TOKEN"), "remintCleanup restores the first-mint token")
+	assert.Equal(t, realWorkflowToken, os.Getenv(workflowTokenEnv), "remintCleanup must leave the preserved workflow token untouched")
+
+	cleanup()
+	assert.Equal(t, realWorkflowToken, os.Getenv("GH_TOKEN"), "cleanup restores the pre-mint value set by the test")
+	assert.Equal(t, "", os.Getenv(workflowTokenEnv), "cleanup unsets the workflow token that was empty before the first mint")
 }
 
 func TestMintAgentToken_CoderRole_GitLabSetsPAT(t *testing.T) {
