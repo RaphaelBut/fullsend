@@ -20,9 +20,9 @@ Accepted
 
 ## Context
 
-Code and fix agents install dependencies inside the sandbox. A package on
-GitHub Packages that another organization owns cannot be read with the minted
-App token, even after the mint grants `packages: read`: GitHub scopes
+Code and fix agents install dependencies inside the sandbox. A public package
+on GitHub Packages that another organization owns cannot be read with the
+minted App token, even after the mint grants `packages: read`: GitHub scopes
 installation tokens to the packages of the org the App is installed in and
 answers `403 Permission installation not allowed to Read organization package`
 (measured 2026-09-09, fullsend#6649). Anonymous requests get 401 even for public
@@ -77,8 +77,9 @@ App token.**
 
 ## Consequences
 
-- Cross-org GitHub Packages installs work with the repository's own token and no
-  new identity or secret.
+- Cross-org installs of public GitHub Packages work with the repository's own
+  token and no new identity or secret; private packages of another org stay
+  out of reach, as they are for the workflow token itself.
 - The token's write permissions are unreachable from the sandbox: only the two
   registry hosts resolve the placeholder, both read-only, and forge writes still
   go through the post-script with the App token.
