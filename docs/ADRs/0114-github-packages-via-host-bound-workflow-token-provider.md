@@ -80,23 +80,19 @@ App token.**
 - Cross-org installs of public GitHub Packages work with the repository's own
   token and no new identity or secret; private packages of another org stay
   out of reach, as they are for the workflow token itself.
-- The token's write permissions are unreachable from the sandbox: only the two
-  registry hosts resolve the placeholder, both read-only, and forge writes still
-  go through the post-script with the App token.
+- The token's write permissions are unreachable through the proxy: the
+  placeholder resolves only at the two registry hosts, the forge hosts the code
+  and fix profiles allow are read-only, and forge writes still go through the
+  post-script with the App token.
 - The value is readable by the agent: OpenShell resolves a static placeholder in
   the header, path or query of a request to a bound host, and the registry
   echoes unknown package names in 404 bodies (verified on OpenShell 0.0.116).
   This is the free-text-endpoint exposure [ADR 0025](0025-provider-credential-delivery-for-sandboxed-agents.md)
-  accepts for every static credential: placeholder-based resolution stays
-  host-bound and read-only at the two registry hosts, but a literal value
-  recovered this way is the Actions job's own `GITHUB_TOKEN` and carries that
-  job's full permission set (`contents:write`, `issues:write`,
-  `pull-requests:write`, `actions:write`, ...), not merely `packages:read`. It
-  is not inherently read-only or forge-host-scoped once extracted — replaying
-  it against any host already reachable by the sandbox's network policy (for
-  example `api.github.com`, allowed read-write by the shipped `fullsend-github`
-  provider profile) carries that full permission set. Header-only placement is
-  an OpenShell roadmap item, tracked as follow-on.
+  accepts for every static credential. A recovered literal is the job's own
+  token with the job's permissions until the job ends, but inside the sandbox it
+  meets the same read-only policy as the App token already in the environment,
+  so it adds no capability and no exfiltration channel. Header-only placement
+  is an OpenShell roadmap item, tracked as follow-on.
 - GitLab and local runs are unchanged, because nothing is preserved outside
   Actions.
 - Provider definitions read from the trusted ref may now reference one more
