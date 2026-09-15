@@ -240,13 +240,14 @@ before assuming the profile itself is wrong.
 ```
 
 Keep `expand: false` on the `host_files` entry. The file holds no secret;
-pnpm still expands `${GITHUB_TOKEN}` in user-level `~/.npmrc`. Inside the
-sandbox that value is the provider placeholder; the proxy resolves it only on
-the two registry hosts and answers `credential_endpoint_mismatch` anywhere
-else. Treat the value itself as readable by the agent all the same: OpenShell
-resolves a static placeholder wherever it appears in a request to a bound
-host, and the registry echoes unknown package names in its 404 body. That is
-the standard exposure of any static OpenShell credential
+pnpm still expands `${GITHUB_TOKEN}` when it reads this file as the user
+config (via `NPM_CONFIG_USERCONFIG` below). Inside the sandbox that value is
+the provider placeholder; the proxy resolves it only on the two registry
+hosts and answers `credential_endpoint_mismatch` anywhere else. Treat the
+value itself as readable by the agent all the same: OpenShell resolves a
+static placeholder wherever it appears in a request to a bound host, and the
+registry echoes unknown package names in its 404 body. That is the standard
+exposure of any static OpenShell credential
 ([ADR 0025](../../ADRs/0025-provider-credential-delivery-for-sandboxed-agents.md));
 the token stays read-only through the proxy and is revoked when the job ends.
 Project `.npmrc` files are not expanded by pnpm ≥ 10.34.2
@@ -264,16 +265,22 @@ openshell:
     - profiles/fullsend-github-packages.yaml
 host_files:
   - src: env/npmrc-github-packages
-    dest: /home/sandbox/.npmrc
+    dest: /sandbox/workspace/.npmrc
     expand: false
+env:
+  sandbox:
+    NPM_CONFIG_USERCONFIG: /sandbox/workspace/.npmrc
 ```
 
 Register the overlay in `.fullsend/config.yaml` as usual (`name: code` /
 `name: fix` with `source: harness/code.yaml` / `harness/fix.yaml`). Pin the
 `base:` URL to a SHA as shown in [Configuration with `base:` composition](#configuration-with-base-composition).
 
-The sandbox user is `sandbox` (uid 998); `/home/sandbox/.npmrc` is that user's
-`$HOME/.npmrc`.
+`/home` is not in the sandbox filesystem policy's `read_write` allowlist —
+`internal/agentnew/templates/policies/base.yaml` only allows `/sandbox`,
+`/tmp`, and `/dev/null` — so the file is mapped under `/sandbox/workspace`
+instead, and `NPM_CONFIG_USERCONFIG` points pnpm/npm at it explicitly rather
+than relying on the sandbox user's `$HOME`.
 
 ### Tuning agents with augmentation skills
 

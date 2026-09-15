@@ -87,9 +87,16 @@ App token.**
   the header, path or query of a request to a bound host, and the registry
   echoes unknown package names in 404 bodies (verified on OpenShell 0.0.116).
   This is the free-text-endpoint exposure [ADR 0025](0025-provider-credential-delivery-for-sandboxed-agents.md)
-  accepts for every static credential and adds no capability: a literal token is
-  still read-only at the forge hosts and revoked when the job ends. Header-only
-  placement is an OpenShell roadmap item, tracked as follow-on.
+  accepts for every static credential: placeholder-based resolution stays
+  host-bound and read-only at the two registry hosts, but a literal value
+  recovered this way is the Actions job's own `GITHUB_TOKEN` and carries that
+  job's full permission set (`contents:write`, `issues:write`,
+  `pull-requests:write`, `actions:write`, ...), not merely `packages:read`. It
+  is not inherently read-only or forge-host-scoped once extracted — replaying
+  it against any host already reachable by the sandbox's network policy (for
+  example `api.github.com`, allowed read-write by the shipped `fullsend-github`
+  provider profile) carries that full permission set. Header-only placement is
+  an OpenShell roadmap item, tracked as follow-on.
 - GitLab and local runs are unchanged, because nothing is preserved outside
   Actions.
 - Provider definitions read from the trusted ref may now reference one more
