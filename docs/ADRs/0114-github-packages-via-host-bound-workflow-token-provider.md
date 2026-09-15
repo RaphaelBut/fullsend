@@ -80,18 +80,25 @@ App token.**
 - Cross-org installs of public GitHub Packages work with the repository's own
   token and no new identity or secret; private packages of another org stay
   out of reach, as they are for the workflow token itself.
-- The token's write permissions are unreachable through the proxy: the
-  placeholder resolves only at the two registry hosts, the forge hosts the code
-  and fix profiles allow are read-only, and forge writes still go through the
-  post-script with the App token.
+- Placeholder *resolution* is host-bound and read-only: the proxy resolves it
+  only at the two registry hosts and rejects it anywhere else
+  (`credential_endpoint_mismatch`), and forge writes still go through the
+  post-script with the App token. This says nothing about the forge hosts
+  themselves — `coder` (which runs both the code and fix stages) uses the
+  `fullsend-github.yaml` profile, which is read-write on `api.github.com` and
+  `github.com`, as it must be for git/gh operations; the placeholder simply
+  cannot be used there.
 - The value is readable by the agent: OpenShell resolves a static placeholder in
   the header, path or query of a request to a bound host, and the registry
   echoes unknown package names in 404 bodies (verified on OpenShell 0.0.116).
   This is the free-text-endpoint exposure [ADR 0025](0025-provider-credential-delivery-for-sandboxed-agents.md)
   accepts for every static credential. A recovered literal is the job's own
-  token with the job's permissions until the job ends, but inside the sandbox it
-  meets the same read-only policy as the App token already in the environment,
-  so it adds no capability and no exfiltration channel. Header-only placement
+  `GITHUB_TOKEN` (`contents:write`, `issues:write`, `pull-requests:write`,
+  `actions:write`, `packages:read` per the reusable code/fix workflows), not
+  the host-bound placeholder — it is not host-bound if replayed as a raw
+  `Authorization` header, and on `coder`'s read-write `fullsend-github.yaml`
+  profile it can call write-capable GitHub APIs, including `actions:write`,
+  which `coder`'s own minted App token does not have. Header-only placement
   is an OpenShell roadmap item, tracked as follow-on.
 - GitLab and local runs are unchanged, because nothing is preserved outside
   Actions.
