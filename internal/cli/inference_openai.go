@@ -895,10 +895,10 @@ func resolveOpenAIStatusSources(fullsendDir string) (openAIStatusSource, error) 
 	staticKey := strings.TrimSpace(os.Getenv(openAIStaticKeyEnv))
 	// Mirrors resolveOpenAICredential's configApplies (run_openai.go): the
 	// committed block applies where an exchange is possible (a GitHub OIDC
-	// endpoint, CI or not) or where nothing else is available. A static
-	// key present without an OIDC endpoint is not overridden by the
-	// committed block — a developer's, or a CI static-key run's,
-	// OPENAI_API_KEY wins.
+	// endpoint, i.e. in CI) or where nothing else is available. WIF from
+	// config.yaml still wins over a static key whenever it's usable here;
+	// the static key wins only when it isn't — a developer's laptop, or a
+	// CI run with no committed WIF config.
 	configApplies := !cfgIDs.IsZero() && (os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "" || staticKey == "")
 	if configApplies {
 		s.Source = "config.yaml"
@@ -960,7 +960,7 @@ func runInferenceOpenAIStatus(cmd *cobra.Command, printer *ui.Printer, repo, ful
 		printer.StepInfo("A run will refuse the openai provider until a credential is configured")
 		printer.StepInfo("Enrol Workload Identity Federation with 'fullsend inference openai import' or 'fullsend github setup --openai-*'")
 		printer.StepInfo("Or set the " + openAIRepoSecretName + " repository secret ('fullsend github set <owner/repo> " + openAIRepoSecretName + " <value>'); the runner exports it as " + openAIStaticKeyEnv)
-		printer.StepInfo("In CI the runner warns that a static OPENAI_API_KEY is in use; Workload Identity Federation remains preferred")
+		printer.StepInfo("Workload Identity Federation remains preferred")
 		return fmt.Errorf("no OpenAI credential configured for %s", repo)
 	}
 

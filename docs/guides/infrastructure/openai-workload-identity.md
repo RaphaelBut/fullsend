@@ -272,14 +272,18 @@ runner uses it only when the three `FULLSEND_OPENAI_*` WIF identifiers are unset
 errors — a typo cannot fall through to the key. When the trio and the secret are both set, WIF wins
 and the secret is unused.
 
-1. Create an API key in the OpenAI project the runs should be billed to.
-2. Set it on the repository:
+1. If the repository was installed or its workflow files were last synced before this feature shipped,
+   re-run `fullsend github setup <owner/repo>` (or `fullsend repos install` for a manifest-managed
+   repository) first — the reusable workflow's caller shim has to forward the secret before setting it
+   does anything.
+2. Create an API key in the OpenAI project the runs should be billed to.
+3. Set it on the repository:
    ```bash
    fullsend github set <owner/repo> FULLSEND_OPENAI_API_KEY <value>
    ```
    Or paste it in Settings → Secrets and variables → Actions → Secrets as `FULLSEND_OPENAI_API_KEY`.
-3. Pick `openai/<model>` for an agent ([step 5](#5-pick-a-gpt-model-for-an-agent)) and trigger a run.
-4. Expect the warning `static OPENAI_API_KEY in CI; prefer Workload Identity Federation` in the run
+4. Pick `openai/<model>` for an agent ([step 5](#5-pick-a-gpt-model-for-an-agent)) and trigger a run.
+5. Expect the warning `static OPENAI_API_KEY in CI; prefer Workload Identity Federation` in the run
    log. `fullsend inference openai status <owner/repo>` reports the same source and that WIF remains
    preferred.
 

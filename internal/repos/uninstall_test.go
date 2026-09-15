@@ -100,8 +100,12 @@ func TestUninstall_InstalledRepo(t *testing.T) {
 	if r.VarsDeleted != 4 {
 		t.Errorf("VarsDeleted = %d, want 4", r.VarsDeleted)
 	}
-	if r.SecretsDeleted != 2 {
-		t.Errorf("SecretsDeleted = %d, want 2", r.SecretsDeleted)
+	// 2 required secrets plus the opt-in FULLSEND_OPENAI_API_KEY, which
+	// uninstall always attempts to delete (idempotent: a 404 for a repo
+	// that never set it is not an error) so a repo that did set it
+	// doesn't keep a long-lived key around after teardown.
+	if r.SecretsDeleted != 3 {
+		t.Errorf("SecretsDeleted = %d, want 3", r.SecretsDeleted)
 	}
 
 	deleted := collectDeletedPaths(client)
@@ -123,8 +127,8 @@ func TestUninstall_InstalledRepo(t *testing.T) {
 	if len(client.DeletedVariables) != 4 {
 		t.Errorf("deleted %d variables, want 4", len(client.DeletedVariables))
 	}
-	if len(client.DeletedSecrets) != 2 {
-		t.Errorf("deleted %d secrets, want 2", len(client.DeletedSecrets))
+	if len(client.DeletedSecrets) != 3 {
+		t.Errorf("deleted %d secrets, want 3", len(client.DeletedSecrets))
 	}
 	for _, ref := range client.DeletedRefs {
 		if strings.Contains(ref, poll.PollStateBranchSlash) || strings.Contains(ref, poll.PollStateBranchEvents) {
@@ -859,5 +863,45 @@ func TestUninstall_GitLabPollStateBranches_DeleteError(t *testing.T) {
 	// Vars and secrets still deleted even when branch deletion fails.
 	if r.VarsDeleted != len(gitlabUninstallVars) {
 		t.Errorf("VarsDeleted = %d, want %d", r.VarsDeleted, len(gitlabUninstallVars))
+	}
+}
+
+func TestUninstallSecretsForForge_GitHub_DeletesOptInOpenAIKey(t *testing.T) {
+	secrets := UninstallSecretsForForge(ForgeGitHub)
+	found := false
+	for _, s := range secrets {
+		if s == forge.SecretOpenAIAPIKey {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("UninstallSecretsForForge(GitHub) = %v, want it to include %s so a torn-down repo doesn't keep the opt-in key", secrets, forge.SecretOpenAIAPIKey)
+	}
+
+	// The opt-in key must never become a health requirement: a repo with
+	// no OpenAI WIF and no static key is not an unhealthy installation.
+	for _, s := range requiredSecretsForForge(ForgeGitHub) {
+		if s == forge.SecretOpenAIAPIKey {
+			t.Errorf("requiredSecretsForForge(GitHub) must not include the opt-in %s", forge.SecretOpenAIAPIKey)
+		}
+	}
+}
+
+func TestUninstallSecretsForForge_GitLab_DeletesOptInOpenAIKey(t *testing.T) {
+	secrets := UninstallSecretsForForge(ForgeGitLab)
+	found := false
+	for _, s := range secrets {
+		if s == forge.SecretGitLabOpenAIAPIKey {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("UninstallSecretsForForge(GitLab) = %v, want it to include %s so a torn-down repo doesn't keep the opt-in key", secrets, forge.SecretGitLabOpenAIAPIKey)
+	}
+
+	for _, s := range requiredSecretsForForge(ForgeGitLab) {
+		if s == forge.SecretGitLabOpenAIAPIKey {
+			t.Errorf("requiredSecretsForForge(GitLab) must not include the opt-in %s", forge.SecretGitLabOpenAIAPIKey)
+		}
 	}
 }

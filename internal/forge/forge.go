@@ -64,6 +64,14 @@ const (
 	// signing is on by default; see poll.EnsureDispatchSecret.
 	SecretDispatch = "FULLSEND_DISPATCH_SECRET"
 
+	// Opt-in OpenAI static-key secrets (ADR 0092): never part of
+	// requiredSecrets/requiredSecretsForForge — a repository with no
+	// OpenAI WIF and no static key configured is not unhealthy. Uninstall
+	// deletes these if present so a torn-down repo doesn't keep a
+	// long-lived key around.
+	SecretOpenAIAPIKey       = "FULLSEND_OPENAI_API_KEY"
+	SecretGitLabOpenAIAPIKey = "OPENAI_API_KEY"
+
 	// Legacy uninstall-only variables — GitLab.
 	VarLegacyBotTokenSecret = "FULLSEND_BOT_TOKEN_SECRET"
 	VarLegacySA             = "FULLSEND_SA"

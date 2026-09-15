@@ -361,6 +361,7 @@ func TestReusableWorkflowsShareCommonInputs(t *testing.T) {
 	commonSecrets := []string{
 		"FULLSEND_GCP_WIF_PROVIDER",
 		"FULLSEND_GCP_PROJECT_ID",
+		"FULLSEND_OPENAI_API_KEY",
 		"OTEL_EXPORTER_OTLP_TRACES_HEADERS",
 		"OTEL_EXPORTER_OTLP_HEADERS",
 	}
@@ -487,6 +488,11 @@ func TestOpenAIAPIKeySecretThreading(t *testing.T) {
 		{"scaffold/fix.yml", loadScaffoldFile(".github/workflows/fix.yml")},
 		{"scaffold/retro.yml", loadScaffoldFile(".github/workflows/retro.yml")},
 		{"scaffold/prioritize.yml", loadScaffoldFile(".github/workflows/prioritize.yml")},
+		// This repo's own installed shims (not just the scaffold templates
+		// new installs get) must forward the secret too, or fullsend's own
+		// runs could never use it.
+		{"fullsend.yaml", loadRepoFile(".github/workflows/fullsend.yaml")},
+		{"prioritize.yml", loadRepoFile(".github/workflows/prioritize.yml")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

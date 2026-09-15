@@ -327,10 +327,13 @@ func checkOpenAIScope(scope string) (warning string, err error) {
 // resolveOpenAICredential picks the credential source for a fullsend-openai
 // provider, in order:
 //
-//  1. WIF — all three FULLSEND_OPENAI_* ids present: exchange the job's
-//     GitHub OIDC token (ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN) for an OpenAI
-//     access token.
-//  2. Static — OPENAI_API_KEY present in the runner environment (local runs).
+//  1. WIF — all three FULLSEND_OPENAI_* ids present, from variables or (with
+//     a GitHub OIDC endpoint) the committed config.yaml block: exchange the
+//     job's GitHub OIDC token (ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN) for an
+//     OpenAI access token. Wins over a static key whenever the trio is
+//     available, in CI or locally.
+//  2. Static — OPENAI_API_KEY present in the runner environment: a local
+//     run, or a CI run where no WIF trio is configured (ADR 0092).
 //  3. Neither — an error naming the variables, before any gateway work.
 //
 // A partially configured WIF trio is an error rather than a silent fall
@@ -348,9 +351,11 @@ func resolveOpenAICredential(ctx context.Context, getenv func(string) string, fr
 	// partially set source is an error rather than a silent fallback.
 	fromConfig = fromConfig.Trimmed()
 	// A committed block applies where an exchange is possible (a GitHub
-	// OIDC endpoint) or where nothing else is available; a developer's
-	// OPENAI_API_KEY on a laptop is not overridden by the repository's
-	// CI configuration.
+	// OIDC endpoint, i.e. in CI) or where nothing else is available: a
+	// static key never overrides a usable WIF block, but does win when
+	// the block isn't usable here — a developer's OPENAI_API_KEY on a
+	// laptop, or a CI run with no committed WIF config, is not blocked
+	// by a config.yaml block that can't be exchanged in this run.
 	configApplies := !fromConfig.IsZero() && (getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "" || strings.TrimSpace(getenv(openAIStaticKeyEnv)) == "")
 	configIgnored := !fromConfig.IsZero() && !configApplies
 	if audience == "" && identityProviderID == "" && serviceAccountID == "" && configApplies {
