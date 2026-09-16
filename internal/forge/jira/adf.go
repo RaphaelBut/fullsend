@@ -1181,6 +1181,11 @@ func adfMarkdownTable(node map[string]any, depth int) string {
 	return b.String()
 }
 
+// lineEndingReplacer flattens every CommonMark line ending (LF, CR, and
+// CRLF) to a single space. "\r\n" must be listed before "\n" and "\r" so
+// a CRLF pair collapses to one space rather than leaving a bare CR behind.
+var lineEndingReplacer = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
+
 // adfMarkdownTableCell renders one ADF tableHeader/tableCell as a single
 // GFM table-cell string: block children joined with spaces, newlines
 // flattened, and pipes escaped so they cannot split the cell.
@@ -1191,7 +1196,7 @@ func adfMarkdownTableCell(cell map[string]any, depth int) string {
 	} else {
 		text = adfMarkdownInline(cell)
 	}
-	text = strings.ReplaceAll(text, "\n", " ")
+	text = lineEndingReplacer.Replace(text)
 	text = strings.ReplaceAll(text, "|", `\|`)
 	return text
 }

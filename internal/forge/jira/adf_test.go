@@ -1794,6 +1794,32 @@ func TestADFToMarkdown_TableEscapesPipesAndEmptyCells(t *testing.T) {
 	}
 }
 
+func TestADFToMarkdown_TableFlattensCRAndCRLF(t *testing.T) {
+	adf := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type": "table",
+				"content": []any{
+					map[string]any{"type": "tableRow", "content": []any{
+						map[string]any{"type": "tableCell", "content": []any{
+							map[string]any{"type": "paragraph", "content": []any{map[string]any{"type": "text", "text": "a\rb"}}},
+						}},
+						map[string]any{"type": "tableCell", "content": []any{
+							map[string]any{"type": "paragraph", "content": []any{map[string]any{"type": "text", "text": "a\r\nb"}}},
+						}},
+					}},
+				},
+			},
+		},
+	}
+	got := ADFToMarkdown(adf)
+	want := "| a b | a b |\n| --- | --- |"
+	if got != want {
+		t.Errorf("ADFToMarkdown(table with CR/CRLF cells) = %q, want %q", got, want)
+	}
+}
+
 func TestADFToMarkdown_TableRoundTripsThroughMarkdownToADF(t *testing.T) {
 	src := "| col1 | col2 |\n| --- | --- |\n| **a** | b |\n| c | d |"
 	doc := mustADF(t, src)
