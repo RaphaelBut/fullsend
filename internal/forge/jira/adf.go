@@ -1186,9 +1186,16 @@ func adfMarkdownTable(node map[string]any, depth int) string {
 // a CRLF pair collapses to one space rather than leaving a bare CR behind.
 var lineEndingReplacer = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
 
+// hardBreakReplacer collapses the "\<LF>" sequence adfMarkdownInline emits
+// for an ADF hardBreak (see its case below) into a single space. It must
+// run before lineEndingReplacer: flattening the LF alone would leave the
+// escaping backslash behind as a stray literal character in the cell text,
+// e.g. "a<hardBreak>b" would render as "a\ b" instead of "a b".
+var hardBreakReplacer = strings.NewReplacer("\\\n", " ")
+
 // adfMarkdownTableCell renders one ADF tableHeader/tableCell as a single
-// GFM table-cell string: block children joined with spaces, newlines
-// flattened, and pipes escaped so they cannot split the cell.
+// GFM table-cell string: block children joined with spaces, hard breaks
+// and newlines flattened, and pipes escaped so they cannot split the cell.
 func adfMarkdownTableCell(cell map[string]any, depth int) string {
 	var text string
 	if blocks := adfMarkdownBlocks(cell, depth); len(blocks) > 0 {
@@ -1196,6 +1203,7 @@ func adfMarkdownTableCell(cell map[string]any, depth int) string {
 	} else {
 		text = adfMarkdownInline(cell)
 	}
+	text = hardBreakReplacer.Replace(text)
 	text = lineEndingReplacer.Replace(text)
 	text = strings.ReplaceAll(text, "|", `\|`)
 	return text

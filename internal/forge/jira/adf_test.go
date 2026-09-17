@@ -1820,6 +1820,38 @@ func TestADFToMarkdown_TableFlattensCRAndCRLF(t *testing.T) {
 	}
 }
 
+func TestADFToMarkdown_TableFlattensHardBreak(t *testing.T) {
+	adf := map[string]any{
+		"type": "doc",
+		"content": []any{
+			map[string]any{
+				"type": "table",
+				"content": []any{
+					map[string]any{"type": "tableRow", "content": []any{
+						map[string]any{"type": "tableCell", "content": []any{
+							map[string]any{"type": "paragraph", "content": []any{
+								map[string]any{"type": "text", "text": "a"},
+								map[string]any{"type": "hardBreak"},
+								map[string]any{"type": "text", "text": "b"},
+							}},
+						}},
+					}},
+				},
+			},
+		},
+	}
+	got := ADFToMarkdown(adf)
+	// A hardBreak renders as "\<LF>" outside table cells (see
+	// TestADFToMarkdown_HardBreak), but a GFM table cell can't contain a
+	// literal newline. Flattening the LF alone would strand the escaping
+	// backslash as a literal character ("a\ b"); it must collapse to a
+	// plain space instead.
+	want := "| a b |\n| --- |"
+	if got != want {
+		t.Errorf("ADFToMarkdown(table with hardBreak cell) = %q, want %q", got, want)
+	}
+}
+
 func TestADFToMarkdown_TableRoundTripsThroughMarkdownToADF(t *testing.T) {
 	src := "| col1 | col2 |\n| --- | --- |\n| **a** | b |\n| c | d |"
 	doc := mustADF(t, src)
