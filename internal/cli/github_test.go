@@ -705,6 +705,33 @@ func TestGitHubSetCmd_SetsRepoSecret(t *testing.T) {
 	assert.Equal(t, "my-project-123", client.CreatedSecrets[0].Value)
 }
 
+func TestGitHubSetCmd_SetsOpenAIAPIKey(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token")
+	client := forge.NewFakeClient()
+	printer := ui.New(&discardWriter{})
+
+	err := runGitHubSet(context.Background(), client, printer, "acme/widget", openAIRepoSecretName, "test-openai-key")
+	require.NoError(t, err)
+
+	require.Len(t, client.CreatedSecrets, 1)
+	assert.Equal(t, openAIRepoSecretName, client.CreatedSecrets[0].Name)
+	assert.Equal(t, "test-openai-key", client.CreatedSecrets[0].Value)
+	assert.Equal(t, "acme", client.CreatedSecrets[0].Owner)
+	assert.Equal(t, "widget", client.CreatedSecrets[0].Repo)
+}
+
+func TestGitHubSetCmd_RejectsEmptyValue(t *testing.T) {
+	client := forge.NewFakeClient()
+	printer := ui.New(&discardWriter{})
+
+	for _, value := range []string{"", "   "} {
+		err := runGitHubSet(context.Background(), client, printer, "acme/widget", openAIRepoSecretName, value)
+		require.Error(t, err, "empty value %q should be rejected", value)
+		assert.Contains(t, err.Error(), "must not be empty")
+	}
+	assert.Empty(t, client.CreatedSecrets, "an empty value must not be stored")
+}
+
 func TestConfigKeyMapping_AllKeys(t *testing.T) {
 	expectedKeys := []string{
 		"FULLSEND_GCP_REGION",
@@ -712,6 +739,7 @@ func TestConfigKeyMapping_AllKeys(t *testing.T) {
 		forge.PerRepoGuardVar,
 		"FULLSEND_GCP_PROJECT_ID",
 		"FULLSEND_GCP_WIF_PROVIDER",
+		openAIRepoSecretName,
 	}
 	for _, key := range expectedKeys {
 		_, ok := configKeyMapping[key]
@@ -722,6 +750,9 @@ func TestConfigKeyMapping_AllKeys(t *testing.T) {
 
 	reviewInfo := configKeyMapping["FULLSEND_REVIEW_CLIENT_ID"]
 	assert.Equal(t, storageVariable, reviewInfo.storage)
+
+	openAIInfo := configKeyMapping[openAIRepoSecretName]
+	assert.Equal(t, storageSecret, openAIInfo.storage)
 }
 
 func TestGitHubSetCmd_ValidatesWIFProvider(t *testing.T) {
