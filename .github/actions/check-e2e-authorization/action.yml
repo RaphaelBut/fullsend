@@ -93,7 +93,7 @@ runs:
           *)
             body+="E2E tests run automatically for org/repo **members and collaborators** on pull requests.
 
-        For other contributors, a maintainer must add the \`ok-to-test\` label **after** the latest push.
+        For other contributors, a maintainer with write access must add the \`ok-to-test\` label **after** the latest push.
         "
             ;;
         esac

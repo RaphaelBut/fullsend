@@ -18,11 +18,20 @@ mkdir -p "${MOCK_BIN}"
 PR_JSON="${TMPDIR}/pr.json"
 EVENTS_JSON="${TMPDIR}/events.json"
 COLLAB_ROLE="${TMPDIR}/collab_role"
+ROLES_DIR="${TMPDIR}/roles"
 GH_LOG="${TMPDIR}/gh.log"
 GH_FAIL="false"
 
 # Default: no collaborator role configured (API returns failure)
 echo "" >"${COLLAB_ROLE}"
+
+# Per-login role; overrides COLLAB_ROLE so a case can give the PR author and
+# the labeler different permissions.
+mkdir -p "${ROLES_DIR}"
+set_role() {
+  echo "$2" >"${ROLES_DIR}/$1"
+}
+set_role "labeler" "write"
 
 write_pr() {
   local assoc="$1"
@@ -34,10 +43,9 @@ write_pr() {
 
 write_events() {
   local events_json="$1"
-  local actor="${2:-labeler}"
-  jq --arg actor "${actor}" '
-    map(if .event == "labeled" then .actor = {login: $actor} else . end)
-  ' <<<"${events_json}" >"${EVENTS_JSON}"
+  # Labeled events without an explicit actor default to "labeler" (write role).
+  jq 'map(if .event == "labeled" and (has("actor") | not) then .actor = {login: "labeler"} else . end)' \
+    <<<"${events_json}" >"${EVENTS_JSON}"
 }
 
 cat >"${MOCK_BIN}/gh" <<EOF
@@ -53,7 +61,14 @@ if [[ "\${GH_FAIL}" == "events" && "\$*" == *"/issues/"*"/events"* ]]; then
 fi
 case "\$*" in
   *"/collaborators/"*"/permission"*)
-    role=\$(cat "${COLLAB_ROLE}")
+    login="\$*"
+    login="\${login#*/collaborators/}"
+    login="\${login%%/permission*}"
+    if [[ -f "${ROLES_DIR}/\${login}" ]]; then
+      role=\$(cat "${ROLES_DIR}/\${login}")
+    else
+      role=\$(cat "${COLLAB_ROLE}")
+    fi
     if [[ -z "\${role}" ]]; then
       echo "not a collaborator" >&2
       exit 1
@@ -125,7 +140,6 @@ unset PR_AUTHOR_ASSOCIATION
 export PR_AUTHOR_ASSOCIATION="CONTRIBUTOR"
 export EVENT_ACTION="synchronize"
 export PR_UPDATED_AT="2026-06-01T10:00:00Z"
-echo "write" >"${COLLAB_ROLE}"
 write_pr "NONE" '[{"name":"ok-to-test"}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
 run_case "untrusted event payload falls through to ok-to-test label check" "true" "ok_to_test" "false"
@@ -169,7 +183,6 @@ run_case "trusted member ignores stale ok-to-test label" "true" "trusted_author"
 
 export EVENT_ACTION="synchronize"
 export PR_UPDATED_AT="2026-06-01T10:00:00Z"
-echo "write" >"${COLLAB_ROLE}"
 write_pr "NONE" '[{"name":"ok-to-test"}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
 run_case "fresh ok-to-test label after push" "true" "ok_to_test" "false"
@@ -199,7 +212,6 @@ run_case "untrusted author without label" "false" "unauthorized" "false"
 export EVENT_ACTION="labeled"
 write_pr "NONE" '[{"name":"ok-to-test"}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
-echo "write" >"${COLLAB_ROLE}"
 run_case "labeled ok-to-test verifies labeler permission" "true" "ok_to_test" "false"
 if grep -q '/issues/42/events' "${GH_LOG}"; then
   echo "PASS: labeled path checks events API"
@@ -208,9 +220,27 @@ else
   FAILURES=$((FAILURES + 1))
 fi
 
-echo "read" >"${COLLAB_ROLE}"
+# Triage-role users can apply labels but must not authorize a run.
+set_role "triager" "triage"
+write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z","actor":{"login":"triager"}}]'
 run_case "ok-to-test labeler without write permission denied" "false" "unauthorized" "false"
-echo "write" >"${COLLAB_ROLE}"
+
+# The latest ok-to-test labeler decides, not an earlier one.
+write_events '[
+  {"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T09:00:00Z"},
+  {"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z","actor":{"login":"triager"}}
+]'
+run_case "latest ok-to-test labeler without write permission denied" "false" "unauthorized" "false"
+
+# Other labels applied later by anyone do not change who applied ok-to-test.
+write_events '[
+  {"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"},
+  {"event":"labeled","label":{"name":"component/cli"},"created_at":"2026-06-01T11:30:00Z","actor":{"login":"triager"}}
+]'
+run_case "later non-ok-to-test label by another user is ignored" "true" "ok_to_test" "false"
+
+write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z","actor":null}]'
+run_case "ok-to-test label event without actor denied" "false" "unauthorized" "false"
 
 export EVENT_ACTION="synchronize"
 unset PR_UPDATED_AT
@@ -269,16 +299,15 @@ write_pr "NONE" '[]'
 : >"${GH_LOG}"
 run_case "collaborator API read permission denied" "false" "unauthorized" "false"
 
-# The PR author lookup may fail, but the labeler permission check still gates
-# authorization independently.
-echo "write" >"${COLLAB_ROLE}"
+# Collaborator API fails for the PR author — falls through to the ok-to-test
+# path, where the labeler's own permission is checked.
+echo "" >"${COLLAB_ROLE}"
 export EVENT_ACTION="synchronize"
 export PR_UPDATED_AT="2026-06-01T10:00:00Z"
-unset PR_AUTHOR_LOGIN
 write_pr "NONE" '[{"name":"ok-to-test"}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
 : >"${GH_LOG}"
-run_case "labeler collaborator API authorizes ok-to-test" "true" "ok_to_test" "false"
+run_case "collaborator API failure falls through to ok-to-test" "true" "ok_to_test" "false"
 
 # No PR_AUTHOR_LOGIN set — should skip collaborator API entirely
 unset PR_AUTHOR_LOGIN EVENT_ACTION PR_UPDATED_AT

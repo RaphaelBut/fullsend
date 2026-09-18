@@ -12,7 +12,7 @@
 # collaborator permission API which correctly resolves regardless of visibility.
 #
 # Freshness uses PR updated_at from the frozen workflow event (PR_UPDATED_AT).
-# On ok-to-test labeled events, authorization is immediate. Does not use
+# On ok-to-test labeled events, freshness is not checked. Does not use
 # committer.date (author-controlled).
 #
 # Usage: check-e2e-authorization.sh PR_NUMBER OWNER/REPO
@@ -140,18 +140,20 @@ else
   fi
 fi
 
-# A label is an authorization boundary: verify the person who applied
-# ok-to-test had write+ permission at the time of the label event. The event
-# actor is separate from the PR author, so checking only the latter would let
-# an untrusted user authorize a run by applying the label.
+# A label is an authorization boundary: the user who last applied ok-to-test
+# must currently have write+ permission. Triage-role users can apply labels
+# without it, so the label alone does not prove a maintainer approved the run.
 if [[ "${reason}" == "ok_to_test" ]]; then
-  events_json="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/events" --paginate | jq -s 'add // []')"
+  if [[ -z "${events_json:-}" ]]; then
+    events_json="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/events" --paginate | jq -s 'add // []')"
+  fi
   labeler_login="$(jq -r --arg label "${OK_TO_TEST_LABEL}" '
     [.[] | select(.event == "labeled" and (.label.name // "") == $label)]
     | max_by(.created_at // "") | .actor.login // empty
   ' <<<"${events_json}")"
 
-  if [[ -z "${labeler_login}" ]] || ! has_write_permission "${labeler_login}"; then
+  # An empty login (no label event, or no actor) is denied too.
+  if ! has_write_permission "${labeler_login}"; then
     authorized=false
     reason="unauthorized"
   fi
