@@ -34,7 +34,10 @@ write_pr() {
 
 write_events() {
   local events_json="$1"
-  echo "${events_json}" >"${EVENTS_JSON}"
+  local actor="${2:-labeler}"
+  jq --arg actor "${actor}" '
+    map(if .event == "labeled" then .actor = {login: $actor} else . end)
+  ' <<<"${events_json}" >"${EVENTS_JSON}"
 }
 
 cat >"${MOCK_BIN}/gh" <<EOF
@@ -122,6 +125,7 @@ unset PR_AUTHOR_ASSOCIATION
 export PR_AUTHOR_ASSOCIATION="CONTRIBUTOR"
 export EVENT_ACTION="synchronize"
 export PR_UPDATED_AT="2026-06-01T10:00:00Z"
+echo "write" >"${COLLAB_ROLE}"
 write_pr "NONE" '[{"name":"ok-to-test"}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
 run_case "untrusted event payload falls through to ok-to-test label check" "true" "ok_to_test" "false"
@@ -165,6 +169,7 @@ run_case "trusted member ignores stale ok-to-test label" "true" "trusted_author"
 
 export EVENT_ACTION="synchronize"
 export PR_UPDATED_AT="2026-06-01T10:00:00Z"
+echo "write" >"${COLLAB_ROLE}"
 write_pr "NONE" '[{"name":"ok-to-test"}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
 run_case "fresh ok-to-test label after push" "true" "ok_to_test" "false"
@@ -193,14 +198,19 @@ run_case "untrusted author without label" "false" "unauthorized" "false"
 
 export EVENT_ACTION="labeled"
 write_pr "NONE" '[{"name":"ok-to-test"}]'
-write_events '[]'
-run_case "labeled ok-to-test authorizes without events lookup" "true" "ok_to_test" "false"
-if grep -q '/events' "${GH_LOG}"; then
-  echo "FAIL: labeled path should not call events API"
-  FAILURES=$((FAILURES + 1))
+write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
+echo "write" >"${COLLAB_ROLE}"
+run_case "labeled ok-to-test verifies labeler permission" "true" "ok_to_test" "false"
+if grep -q '/issues/42/events' "${GH_LOG}"; then
+  echo "PASS: labeled path checks events API"
 else
-  echo "PASS: labeled path skips events API"
+  echo "FAIL: labeled path should check events API"
+  FAILURES=$((FAILURES + 1))
 fi
+
+echo "read" >"${COLLAB_ROLE}"
+run_case "ok-to-test labeler without write permission denied" "false" "unauthorized" "false"
+echo "write" >"${COLLAB_ROLE}"
 
 export EVENT_ACTION="synchronize"
 unset PR_UPDATED_AT
@@ -259,14 +269,16 @@ write_pr "NONE" '[]'
 : >"${GH_LOG}"
 run_case "collaborator API read permission denied" "false" "unauthorized" "false"
 
-# Collaborator API fails — should fall through to ok-to-test label path
-echo "" >"${COLLAB_ROLE}"
+# The PR author lookup may fail, but the labeler permission check still gates
+# authorization independently.
+echo "write" >"${COLLAB_ROLE}"
 export EVENT_ACTION="synchronize"
 export PR_UPDATED_AT="2026-06-01T10:00:00Z"
+unset PR_AUTHOR_LOGIN
 write_pr "NONE" '[{"name":"ok-to-test"}]'
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
 : >"${GH_LOG}"
-run_case "collaborator API failure falls through to ok-to-test" "true" "ok_to_test" "false"
+run_case "labeler collaborator API authorizes ok-to-test" "true" "ok_to_test" "false"
 
 # No PR_AUTHOR_LOGIN set — should skip collaborator API entirely
 unset PR_AUTHOR_LOGIN EVENT_ACTION PR_UPDATED_AT

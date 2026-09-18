@@ -4,7 +4,7 @@
 # Authorized when the PR author is OWNER/MEMBER/COLLABORATOR, when the author
 # is a trusted bot (e.g. renovate-fullsend[bot]), when the collaborator
 # permission API confirms write+ access, or when a fresh ok-to-test label was
-# applied after the latest push.
+# applied by a user with write+ access after the latest push.
 #
 # The author_association field from the event payload can misreport org members
 # whose membership visibility is private (returns CONTRIBUTOR/NONE instead of
@@ -137,6 +137,23 @@ else
       label_removed=true
       reason="stale_ok_to_test"
     fi
+  fi
+fi
+
+# A label is an authorization boundary: verify the person who applied
+# ok-to-test had write+ permission at the time of the label event. The event
+# actor is separate from the PR author, so checking only the latter would let
+# an untrusted user authorize a run by applying the label.
+if [[ "${reason}" == "ok_to_test" ]]; then
+  events_json="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/events" --paginate | jq -s 'add // []')"
+  labeler_login="$(jq -r --arg label "${OK_TO_TEST_LABEL}" '
+    [.[] | select(.event == "labeled" and (.label.name // "") == $label)]
+    | max_by(.created_at // "") | .actor.login // empty
+  ' <<<"${events_json}")"
+
+  if [[ -z "${labeler_login}" ]] || ! has_write_permission "${labeler_login}"; then
+    authorized=false
+    reason="unauthorized"
   fi
 fi
 
