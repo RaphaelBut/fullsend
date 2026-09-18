@@ -86,6 +86,10 @@ runs:
             body+="The \`ok-to-test\` label was removed because new commits landed after it was applied. A maintainer must re-apply \`ok-to-test\` after reviewing the latest changes.
         "
             ;;
+          untrusted_labeler)
+            body+="The \`ok-to-test\` label was removed because it was applied by a user without write access. A maintainer with write access must re-apply \`ok-to-test\` after reviewing the latest changes.
+        "
+            ;;
           error)
             body+="The authorization check failed (GitHub API error). Re-run the workflow when the API is available; if this persists, contact a maintainer.
         "
@@ -98,7 +102,7 @@ runs:
             ;;
         esac
 
-        if [[ "${LABEL_REMOVED}" == "true" ]]; then
+        if [[ "${LABEL_REMOVED}" == "true" && "${REASON}" == "stale_ok_to_test" ]]; then
           body+="
         > **Note:** \`ok-to-test\` was cleared due to new commits.
         "

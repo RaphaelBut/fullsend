@@ -222,8 +222,9 @@ see [ADR 0054](../../ADRs/0054-require-authorization-on-all-agent-dispatch-paths
 
 External contributors and fork PR authors must have a maintainer with write
 access apply the **`ok-to-test`** label **after** the latest push. A label from
-anyone else (for example a triage-role user) does not authorize the run. The
-label must be created once in GitHub repo settings (Settings → Labels).
+anyone else (for example a triage-role user) is removed and does not authorize
+the run. The label must be created once in GitHub repo settings (Settings →
+Labels).
 
 ### Stale labels
 

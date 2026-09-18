@@ -76,10 +76,22 @@ has_write_permission() {
   local perm_json role
   perm_json=$(gh api "repos/${REPOSITORY}/collaborators/${username}/permission" 2>/dev/null) || return 1
   role=$(jq -r '.role_name' <<<"${perm_json}") || return 1
-  case "${role}" in
+  is_write_role "${role}"
+}
+
+is_write_role() {
+  case "${1:-}" in
     admin|maintain|write) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# The ERR trap is not inherited by functions: return 1 so it fires at the call.
+remove_ok_to_test_label() {
+  if [[ "${CHECK_E2E_AUTH_DRY_RUN:-}" != "true" ]]; then
+    gh api -X DELETE "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels/${OK_TO_TEST_LABEL}" >/dev/null || return 1
+  fi
+  label_removed=true
 }
 
 label_removed=false
@@ -131,10 +143,7 @@ else
       authorized=true
       reason="ok_to_test"
     else
-      if [[ "${CHECK_E2E_AUTH_DRY_RUN:-}" != "true" ]]; then
-        gh api -X DELETE "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels/${OK_TO_TEST_LABEL}" >/dev/null
-      fi
-      label_removed=true
+      remove_ok_to_test_label
       reason="stale_ok_to_test"
     fi
   fi
@@ -152,10 +161,18 @@ if [[ "${reason}" == "ok_to_test" ]]; then
     | max_by(.created_at // "") | .actor.login // empty
   ' <<<"${events_json}")"
 
-  # An empty login (no label event, or no actor) is denied too.
-  if ! has_write_permission "${labeler_login}"; then
+  # The API answers 200 for any user or bot, so a failed lookup is an API
+  # error (reason=error via the ERR trap), not a denial.
+  labeler_role=""
+  if [[ -n "${labeler_login}" ]]; then
+    labeler_role="$(gh api "repos/${REPOSITORY}/collaborators/${labeler_login}/permission" | jq -r '.role_name // ""')"
+  fi
+
+  # Remove the label so a maintainer's re-apply fires a new labeled event.
+  if ! is_write_role "${labeler_role}"; then
     authorized=false
-    reason="unauthorized"
+    reason="untrusted_labeler"
+    remove_ok_to_test_label
   fi
 fi
 

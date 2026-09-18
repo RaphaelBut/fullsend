@@ -59,6 +59,14 @@ if [[ "\${GH_FAIL}" == "events" && "\$*" == *"/issues/"*"/events"* ]]; then
   echo "simulated events API failure" >&2
   exit 1
 fi
+if [[ "\${GH_FAIL}" == "delete" && "\$*" == *DELETE* ]]; then
+  echo "simulated label DELETE failure" >&2
+  exit 1
+fi
+if [[ "\${GH_FAIL}" == "permission" && "\$*" == *"/collaborators/"* ]]; then
+  echo "simulated permission API failure" >&2
+  exit 1
+fi
 case "\$*" in
   *"/collaborators/"*"/permission"*)
     login="\$*"
@@ -223,14 +231,14 @@ fi
 # Triage-role users can apply labels but must not authorize a run.
 set_role "triager" "triage"
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z","actor":{"login":"triager"}}]'
-run_case "ok-to-test labeler without write permission denied" "false" "unauthorized" "false"
+run_case "ok-to-test labeler without write permission denied" "false" "untrusted_labeler" "true"
 
 # The latest ok-to-test labeler decides, not an earlier one.
 write_events '[
   {"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T09:00:00Z"},
   {"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z","actor":{"login":"triager"}}
 ]'
-run_case "latest ok-to-test labeler without write permission denied" "false" "unauthorized" "false"
+run_case "latest ok-to-test labeler without write permission denied" "false" "untrusted_labeler" "true"
 
 # Other labels applied later by anyone do not change who applied ok-to-test.
 write_events '[
@@ -240,7 +248,27 @@ write_events '[
 run_case "later non-ok-to-test label by another user is ignored" "true" "ok_to_test" "false"
 
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z","actor":null}]'
-run_case "ok-to-test label event without actor denied" "false" "unauthorized" "false"
+run_case "ok-to-test label event without actor denied" "false" "untrusted_labeler" "true"
+
+# A failed labeler lookup is an API error, not a denial.
+write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
+export GH_FAIL="permission"
+run_case "labeler permission API failure returns error" "false" "error" "false"
+export GH_FAIL="false"
+
+unset CHECK_E2E_AUTH_DRY_RUN
+write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z","actor":{"login":"triager"}}]'
+run_case "untrusted labeler removes label" "false" "untrusted_labeler" "true"
+if ! grep -q DELETE "${GH_LOG}"; then
+  echo "FAIL: untrusted labeler removes label (expected gh DELETE call)"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "PASS: untrusted labeler removes label (DELETE exercised)"
+fi
+export GH_FAIL="delete"
+run_case "label removal failure returns error" "false" "error" "false"
+export GH_FAIL="false"
+export CHECK_E2E_AUTH_DRY_RUN="true"
 
 export EVENT_ACTION="synchronize"
 unset PR_UPDATED_AT
