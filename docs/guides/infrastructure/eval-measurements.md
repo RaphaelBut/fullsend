@@ -112,6 +112,14 @@ enabled only for the agents that list it.
 First scorer: **`trace_fitness`** (catalog id `em-001`) — span tree + expected
 attributes so later scorers can trust the trace.
 
+Second scorer: **`run_health`** (catalog id `em-002`) — deterministic
+tool-call defect detection over the always-on `execute_tool` spans
+([ADR 0108](../../ADRs/0108-tool-call-span-topology.md)). It fails a run only
+on an unambiguous integrity break (a tool result with no matching call) and
+reports tool errors and unanswered calls as signals; runs whose runtime emits
+no `execute_tool` spans (pi, codex) and runs that made no tool calls are
+skipped.
+
 Manifest shape (first ship — enablement only):
 
 ```yaml
