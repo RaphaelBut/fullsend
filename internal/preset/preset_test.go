@@ -4,16 +4,28 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func fetchHTTPSWithTestTLS(ctx context.Context, t *testing.T, srv *httptest.Server, rawURL string, skipIPCheck bool) ([]byte, error) {
+	t.Helper()
+	transport, ok := srv.Client().Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("httptest TLS client did not provide an HTTP transport")
+	}
+	return fetchHTTPSWithTLSConfig(ctx, rawURL, skipIPCheck, transport.TLSClientConfig)
+}
 
 func TestFetch_LocalFile(t *testing.T) {
 	dir := t.TempDir()
@@ -50,11 +62,7 @@ func TestFetch_HTTPS(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origTransport := http.DefaultTransport
-	http.DefaultTransport = srv.Client().Transport
-	defer func() { http.DefaultTransport = origTransport }()
-
-	data, err := Fetch(context.Background(), srv.URL+"/preset.yaml")
+	data, err := fetchHTTPSWithTestTLS(context.Background(), t, srv, srv.URL+"/preset.yaml", true)
 	require.NoError(t, err)
 	assert.Equal(t, content, string(data))
 }
@@ -65,11 +73,7 @@ func TestFetch_HTTPSNotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origTransport := http.DefaultTransport
-	http.DefaultTransport = srv.Client().Transport
-	defer func() { http.DefaultTransport = origTransport }()
-
-	_, err := Fetch(context.Background(), srv.URL+"/preset.yaml")
+	_, err := fetchHTTPSWithTestTLS(context.Background(), t, srv, srv.URL+"/preset.yaml", true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "HTTP 404")
 }
@@ -80,11 +84,7 @@ func TestFetch_HTTPSEmpty(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origTransport := http.DefaultTransport
-	http.DefaultTransport = srv.Client().Transport
-	defer func() { http.DefaultTransport = origTransport }()
-
-	_, err := Fetch(context.Background(), srv.URL+"/empty.yaml")
+	_, err := fetchHTTPSWithTestTLS(context.Background(), t, srv, srv.URL+"/empty.yaml", true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is empty")
 }
@@ -93,13 +93,10 @@ func TestFetch_HTTPSUnavailable(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("version: \"1\"\n"))
 	}))
-	origTransport := http.DefaultTransport
-	http.DefaultTransport = srv.Client().Transport
-	defer func() { http.DefaultTransport = origTransport }()
 	url := srv.URL + "/preset.yaml"
 	srv.Close()
 
-	_, err := Fetch(context.Background(), url)
+	_, err := fetchHTTPSWithTestTLS(context.Background(), t, srv, url, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fetching preset")
 }
@@ -137,11 +134,7 @@ func TestFetch_HTTPSExceedsMaxSize(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origTransport := http.DefaultTransport
-	http.DefaultTransport = srv.Client().Transport
-	defer func() { http.DefaultTransport = origTransport }()
-
-	_, err := Fetch(context.Background(), srv.URL+"/large.yaml")
+	_, err := fetchHTTPSWithTestTLS(context.Background(), t, srv, srv.URL+"/large.yaml", true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds maximum size")
 }
@@ -157,11 +150,7 @@ func TestFetch_HTTPSRedirectToHTTP_Rejected(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origTransport := http.DefaultTransport
-	http.DefaultTransport = srv.Client().Transport
-	defer func() { http.DefaultTransport = origTransport }()
-
-	_, err := Fetch(context.Background(), srv.URL+"/preset.yaml")
+	_, err := fetchHTTPSWithTestTLS(context.Background(), t, srv, srv.URL+"/preset.yaml", true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "non-HTTPS")
 }
@@ -218,10 +207,17 @@ func TestValidateYAML_Invalid(t *testing.T) {
 
 func TestIsRemote(t *testing.T) {
 	assert.True(t, IsRemote("https://example.com/preset.yaml"))
-	assert.True(t, IsRemote("http://example.com/preset.yaml"))
+	// Fetch itself only ever treats https:// as remote: any other
+	// "://" scheme is an unsupported-scheme error, not a fetch. IsRemote
+	// mirrors that so it never disagrees with what Fetch would actually do.
+	assert.False(t, IsRemote("http://example.com/preset.yaml"))
 	assert.False(t, IsRemote("/local/path/preset.yaml"))
 	assert.False(t, IsRemote("relative/path.yaml"))
 	assert.False(t, IsRemote("://not-a-url"))
+	// Regression: a Windows-style path parses with scheme "C" under
+	// url.Parse, which previously made IsRemote misreport it as remote
+	// even though Fetch treats it as a local path (no https:// prefix).
+	assert.False(t, IsRemote(`C:\presets\org.yaml`))
 }
 
 func TestLoad_LocalWithHash(t *testing.T) {
@@ -271,13 +267,9 @@ func TestFetch_CanceledContext(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origTransport := http.DefaultTransport
-	http.DefaultTransport = srv.Client().Transport
-	defer func() { http.DefaultTransport = origTransport }()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := Fetch(ctx, srv.URL+"/preset.yaml")
+	_, err := fetchHTTPSWithTestTLS(ctx, t, srv, srv.URL+"/preset.yaml", true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "fetching preset")
 }
@@ -288,11 +280,7 @@ func TestFetch_HTTPSTooManyRedirects(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	origTransport := http.DefaultTransport
-	http.DefaultTransport = srv.Client().Transport
-	defer func() { http.DefaultTransport = origTransport }()
-
-	_, err := Fetch(context.Background(), srv.URL+"/loop.yaml")
+	_, err := fetchHTTPSWithTestTLS(context.Background(), t, srv, srv.URL+"/loop.yaml", true)
 	require.Error(t, err)
 }
 
@@ -344,4 +332,130 @@ func TestApply_DoesNotMutateInputs(t *testing.T) {
 	plan.Overlay[0] = 'Y'
 	assert.Equal(t, "version: \"1\"\n", string(preset))
 	assert.Equal(t, "overlay\n", string(overlay))
+}
+
+// --- SSRF hardening: fetchHTTPS ---
+
+func TestFetchHTTPS_BlocksLoopbackTarget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("version: \"1\"\n"))
+	}))
+	defer srv.Close()
+
+	// skipIPCheck=false: production behavior. The test server is bound to
+	// loopback, so the resolved-IP validation must reject it exactly as it
+	// would reject an attacker-supplied loopback target.
+	_, err := fetchHTTPS(context.Background(), srv.URL+"/preset.yaml", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+func TestFetchHTTPS_BlocksPrivateIPTarget(t *testing.T) {
+	// A private-range IP literal never needs a live listener: safeDialContext
+	// rejects it before any network I/O occurs.
+	_, err := fetchHTTPS(context.Background(), "https://10.1.2.3/preset.yaml", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+func TestFetchHTTPS_BlocksLinkLocalMetadataTarget(t *testing.T) {
+	// 169.254.169.254 is the cloud-metadata address; must be blocked even
+	// without a listener present.
+	_, err := fetchHTTPS(context.Background(), "https://169.254.169.254/preset.yaml", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+func TestFetchHTTPS_SkipIPCheckAllowsLoopback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("version: \"1\"\n"))
+	}))
+	defer srv.Close()
+
+	data, err := fetchHTTPS(context.Background(), srv.URL+"/preset.yaml", true)
+	require.NoError(t, err)
+	assert.Equal(t, "version: \"1\"\n", string(data))
+}
+
+func TestFetchHTTPS_RejectsUserinfo(t *testing.T) {
+	_, err := fetchHTTPS(context.Background(), "https://user:pass@example.com/preset.yaml", true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "userinfo")
+}
+
+func TestFetchHTTPS_RedirectRejectsUserinfo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://user:pass@internal.example/preset.yaml", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	_, err := fetchHTTPS(context.Background(), srv.URL+"/preset.yaml", true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "userinfo")
+}
+
+func TestFetchHTTPS_IgnoresProxyEnv(t *testing.T) {
+	content := "version: \"1\"\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(content))
+	}))
+	defer srv.Close()
+
+	// Point HTTP_PROXY at an address nothing listens on. If fetchHTTPS
+	// honored the environment proxy (the pre-fix behavior), the request
+	// would be routed through it and fail to connect. Because Transport.Proxy
+	// is forced to nil, the request must go straight to srv and succeed.
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+
+	data, err := fetchHTTPS(context.Background(), srv.URL+"/preset.yaml", true)
+	require.NoError(t, err)
+	assert.Equal(t, content, string(data))
+}
+
+func TestSafeDialContext_BlocksLoopback(t *testing.T) {
+	dial := safeDialContext(&net.Dialer{Timeout: time.Second}, false)
+	_, err := dial(context.Background(), "tcp", "127.0.0.1:9999")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+func TestSafeDialContext_BlocksPrivateIP(t *testing.T) {
+	dial := safeDialContext(&net.Dialer{Timeout: time.Second}, false)
+	_, err := dial(context.Background(), "tcp", "10.1.2.3:443")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+func TestSafeDialContext_BlocksHTTPSRedirectTarget(t *testing.T) {
+	redirectURL, err := url.Parse("https://10.1.2.3/preset.yaml")
+	require.NoError(t, err)
+
+	dial := safeDialContext(&net.Dialer{Timeout: time.Second}, false)
+	_, err = dial(context.Background(), "tcp", net.JoinHostPort(redirectURL.Hostname(), "443"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+func TestSafeDialContext_BlocksLinkLocal(t *testing.T) {
+	dial := safeDialContext(&net.Dialer{Timeout: time.Second}, false)
+	_, err := dial(context.Background(), "tcp", "169.254.169.254:80")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+func TestSafeDialContext_SkipIPCheckAllowsLoopback(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr == nil {
+			conn.Close()
+		}
+	}()
+
+	dial := safeDialContext(&net.Dialer{Timeout: time.Second}, true)
+	conn, err := dial(context.Background(), "tcp", ln.Addr().String())
+	require.NoError(t, err)
+	conn.Close()
 }

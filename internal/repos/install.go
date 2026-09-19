@@ -15,6 +15,7 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	"github.com/fullsend-ai/fullsend/internal/maputil"
 	"github.com/fullsend-ai/fullsend/internal/poll"
+	"github.com/fullsend-ai/fullsend/internal/preset"
 	"github.com/fullsend-ai/fullsend/internal/scaffold"
 )
 
@@ -112,6 +113,11 @@ type InstallConfig struct {
 	// differs from the running binary, so templates are fetched from the
 	// fullsend-ai/fullsend repo at the pinned ref.
 	PrebuiltScaffoldFiles scaffold.InstallFiles
+
+	// Preset, when non-nil, is written byte-for-byte as
+	// .fullsend/config.base.yaml. The overlay (.fullsend/config.yaml) is
+	// still generated independently and is never merged with the preset.
+	Preset []byte
 }
 
 // InstallResult holds the outcome of a per-repo installation.
@@ -414,9 +420,29 @@ func ExpectedScaffoldContent(ctx context.Context, resolved ResolvedConfig, dcfg 
 // the full install.
 func BuildScaffoldFiles(cfg InstallConfig) ([]forge.TreeFile, error) {
 	var perRepoCfg config.PerRepoConfigWriter
-	if cfg.PerRepoConfig != nil {
+	switch {
+	case cfg.PerRepoConfig != nil:
 		perRepoCfg = cfg.PerRepoConfig
-	} else {
+	case len(cfg.Preset) > 0:
+		// A base preset layer is declared: build a stub overlay with
+		// only explicit fleet overrides (mirroring buildPresetOverlay
+		// in `github setup --config`), rather than NewPerRepoConfig's
+		// full defaults. Layered accessors prefer the overlay over the
+		// base, so materializing default roles/allowed_remote_resources/
+		// create_issues here would silently shadow the preset's values.
+		// cfg.Roles is only non-empty when the caller explicitly
+		// requested roles (see defaultRoles in converge.go); an unset
+		// Roles here lets the preset (or its own fallback defaults)
+		// take effect through the overlay -> base -> code-default chain.
+		overlay := config.NewEmptyPerRepoOverlay()
+		if len(cfg.Roles) > 0 {
+			overlay.SetRoles(cfg.Roles)
+		}
+		if cfg.Runtime != "" {
+			overlay.SetRuntime(cfg.Runtime)
+		}
+		perRepoCfg = overlay
+	default:
 		generated := config.NewPerRepoConfig(cfg.Roles, cfg.Owner+"/"+cfg.Repo)
 		if cfg.Runtime != "" {
 			generated.SetRuntime(cfg.Runtime)
@@ -461,6 +487,14 @@ func BuildScaffoldFiles(cfg InstallConfig) ([]forge.TreeFile, error) {
 		Content: cfgYAML,
 		Mode:    "100644",
 	})
+	if len(cfg.Preset) > 0 {
+		plan := preset.Apply(cfg.Preset, nil, nil)
+		files = append(files, forge.TreeFile{
+			Path:    preset.BasePath,
+			Content: plan.Base,
+			Mode:    "100644",
+		})
+	}
 
 	return files, nil
 }

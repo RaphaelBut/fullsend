@@ -10,6 +10,7 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	"github.com/fullsend-ai/fullsend/internal/mintcore"
+	"github.com/fullsend-ai/fullsend/internal/preset"
 	"github.com/fullsend-ai/fullsend/internal/scaffold"
 )
 
@@ -25,6 +26,15 @@ type ConvergeConfig struct {
 
 	// Roles is the list of agent roles to install (e.g., "triage", "coder").
 	Roles []string
+
+	// RolesExplicit is true when the caller explicitly passed --roles,
+	// as opposed to Roles carrying the flag's own default value. Fresh
+	// installs of a repo with a declared configuration preset use this
+	// to decide whether to write roles into the overlay (explicit
+	// override) or leave them unset so the preset's roles (or the
+	// code-default fallback) take effect through the layered accessor
+	// chain — see BuildScaffoldFiles.
+	RolesExplicit bool
 
 	// UpstreamRef is the git ref (SHA) used to pin scaffold workflow refs.
 	UpstreamRef string
@@ -200,6 +210,7 @@ type convergeDiscovery struct {
 	repo       ResolvedRepo
 	resolved   ResolvedConfig
 	components []ComponentStatus
+	preset     []byte
 	err        error
 }
 
@@ -217,6 +228,14 @@ func hasComponent(components []ComponentStatus, name string) bool {
 func secretsPresent(components []ComponentStatus) bool {
 	return hasComponent(components, "secret:"+forge.SecretGCPProjectID) &&
 		hasComponent(components, "secret:"+forge.SecretGCPWIFProvider)
+}
+
+func shouldWarnRemotePreset(source, hash string, warned map[string]bool) bool {
+	if hash != "" || !preset.IsRemote(source) || warned[source] {
+		return false
+	}
+	warned[source] = true
+	return true
 }
 
 // existingSecretNames returns the drift field names (e.g.
@@ -466,6 +485,8 @@ func Converge(ctx context.Context, cfg ConvergeConfig,
 		index        int
 	}
 	wifSeen := make(map[string]wifEntry)
+	store := newPresetCache()
+	warnedRemote := make(map[string]bool)
 
 	for i, d := range discoveries {
 		if d.err != nil {
@@ -475,6 +496,25 @@ func Converge(ctx context.Context, cfg ConvergeConfig,
 				Error: fmt.Errorf("checking installation status: %w", d.err),
 			}
 			continue
+		}
+
+		// Load declared presets before any writes so a hash mismatch or
+		// invalid source fails the repo without applying changes.
+		if d.resolved.Config != "" {
+			data, loadErr := store.Load(ctx, d.resolved.Config, d.resolved.ConfigHash)
+			if loadErr != nil {
+				result.Results[i] = ConvergeResult{
+					Owner: d.repo.Owner,
+					Repo:  d.repo.Repo,
+					Error: fmt.Errorf("loading config preset: %w", loadErr),
+				}
+				continue
+			}
+			d.preset = data
+			if shouldWarnRemotePreset(d.resolved.Config, d.resolved.ConfigHash, warnedRemote) {
+				progress(d.repo.Owner+"/"+d.repo.Repo, "preset",
+					"Remote preset fetched without config_hash; content integrity is not verified")
+			}
 		}
 
 		// Compute WIF for repos that need secrets written.
@@ -640,6 +680,13 @@ func convergeRepo(ctx context.Context,
 				Action:    "add",
 				Detail:    "Would install (new)",
 			})
+			if len(d.preset) > 0 {
+				cr.Actions = append(cr.Actions, ComponentAction{
+					Component: preset.BasePath,
+					Action:    "add",
+					Detail:    "would write config preset as " + preset.BasePath,
+				})
+			}
 			progress(repoFullName, "dry-run", "Would install (new)")
 			return cr
 		}
@@ -656,11 +703,22 @@ func convergeRepo(ctx context.Context,
 				"vendor enabled but GitLab CI templates do not yet reference the vendored binary")
 		}
 
+		installRoles := defaultRoles(cfg.Roles)
+		if len(d.preset) > 0 && !cfg.RolesExplicit {
+			// A base preset is declared and the caller did not
+			// explicitly pass --roles: leave Roles unset so
+			// BuildScaffoldFiles writes a stub overlay and the
+			// preset's own roles (or its code-default fallback) take
+			// effect via the layered accessor chain, instead of the
+			// fleet-wide default roles shadowing them.
+			installRoles = nil
+		}
+
 		installCfg := InstallConfig{
 			Owner:             rr.Owner,
 			Repo:              rr.Repo,
 			Forge:             resolved.Forge,
-			Roles:             defaultRoles(cfg.Roles),
+			Roles:             installRoles,
 			MintURL:           resolved.MintURL,
 			InferenceProject:  cfg.InferenceProject,
 			InferenceRegion:   cfg.InferenceRegion,
@@ -674,6 +732,7 @@ func convergeRepo(ctx context.Context,
 			ReuseSecrets:      hasSecrets,
 			ExistingSecrets:   existingSecretNames(d.components),
 			VendorBinary:      vendor,
+			Preset:            d.preset,
 		}
 
 		// When vendored, the running binary's embedded templates match the
@@ -859,6 +918,24 @@ func convergeRepo(ctx context.Context,
 		return cr
 	}
 	allScaffoldFiles = append(allScaffoldFiles, contentDriftFiles...)
+
+	// 2d-iii: Configuration preset — replace .fullsend/config.base.yaml
+	// wholesale when a preset is declared and the installed bytes differ.
+	// Overlay is never rewritten. No declared preset is a no-op so an
+	// existing base file is preserved without comparison.
+	presetFiles, presetActions := convergePresetFiles(ctx, resolved, d.preset, cfg.DryRun, progress)
+	cr.Actions = append(cr.Actions, presetActions...)
+	var presetErrors []string
+	for _, a := range presetActions {
+		if a.Action == "error" {
+			presetErrors = append(presetErrors, a.Detail)
+		}
+	}
+	if len(presetErrors) > 0 {
+		cr.Error = fmt.Errorf("convergence errors: %s", strings.Join(presetErrors, "; "))
+		return cr
+	}
+	allScaffoldFiles = append(allScaffoldFiles, presetFiles...)
 
 	// 2e: Commit all scaffold file changes in one atomic commit.
 	// Variable/secret writes above are not rolled back on commit failure;

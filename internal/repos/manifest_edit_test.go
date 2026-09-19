@@ -55,6 +55,43 @@ func TestAddToManifest_Basic(t *testing.T) {
 	}
 }
 
+// TestAddToManifest_LocalConfigSourceStaysRelativeOnWriteBack guards
+// against Validate's local-path resolution leaking into the manifest
+// written back to disk. AddToManifest (like RemoveFromManifest) calls
+// LoadManifest, Validate, then marshals the same *Manifest back to
+// repos.yaml; the committed defaults.config must stay the relative path
+// the operator wrote, not a machine-local absolute path.
+func TestAddToManifest_LocalConfigSourceStaysRelativeOnWriteBack(t *testing.T) {
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "repos.yaml")
+	presetPath := filepath.Join(dir, "preset.yaml")
+
+	require.NoError(t, os.WriteFile(presetPath, []byte("version: \"1\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(manifestPath, []byte(`version: 1
+defaults:
+  config: ./preset.yaml
+github:
+  mint_url: https://mint.example.com
+  repos:
+    - name: acme/existing
+`), 0o644))
+
+	manifest, err := LoadManifest(context.Background(), manifestPath)
+	require.NoError(t, err)
+	require.NoError(t, manifest.Validate())
+
+	_, _, err = AddToManifest(context.Background(), ManifestEditConfig{
+		Manifest:     manifest,
+		ManifestPath: manifestPath,
+	}, ForgeGitHub, []RepoEntry{{Name: "acme/new-repo"}}, nil, nil)
+	require.NoError(t, err)
+
+	reloaded, err := LoadManifest(context.Background(), manifestPath)
+	require.NoError(t, err)
+	assert.Equal(t, "./preset.yaml", reloaded.Defaults.Config,
+		"defaults.config must remain the relative path on disk, not the resolved absolute path")
+}
+
 func TestAddToManifest_Duplicate(t *testing.T) {
 	manifest := testManifest("acme/api")
 
@@ -634,6 +671,42 @@ func TestSetDefault_AllowedRemoteResources_ValidatesURLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error for valid HTTPS URLs, got: %v", err)
 	}
+}
+
+func TestSetDefault_Config(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "repos.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("version: 1\ngithub:\n  repos:\n    - name: acme/a\n"), 0o644))
+
+	require.NoError(t, SetDefault(path, "defaults.config", "https://example.com/preset.yaml"))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "config: https://example.com/preset.yaml")
+
+	err = SetDefault(path, "defaults.config", "http://insecure.example.com/preset.yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported URL scheme")
+
+	require.NoError(t, SetDefault(path, "defaults.config", ""), "empty clears the default")
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "config:")
+}
+
+func TestSetDefault_ConfigHash(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "repos.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("version: 1\ngithub:\n  repos:\n    - name: acme/a\n"), 0o644))
+	hash := sha256Hex(testPresetYAML)
+
+	require.NoError(t, SetDefault(path, "defaults.config_hash", hash))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "config_hash: "+hash)
+
+	err = SetDefault(path, "defaults.config_hash", "short")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "64-character")
 }
 
 func TestSetDefault_CreatesManifestIfMissing(t *testing.T) {

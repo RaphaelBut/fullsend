@@ -40,6 +40,14 @@ and writes only explicitly passed persistent setup flags into
 the preset alone; CLI flags override the same keys without rewriting the
 preset file.
 
+`fullsend repos install` uses the same preset implementation. Declare a
+default source in `defaults.config` (optional `defaults.config_hash`) or
+override it per repository with `config` / `config_hash`. The `none`
+sentinel disables inheritance. Convergence writes the fetched bytes to
+`config.base.yaml` and never edits the overlay; `repos status` reports
+base-file drift only when a preset is declared. See
+[Repo Management — Configuration presets](../getting-started/repo-management.md#configuration-presets).
+
 ### Marshal behavior
 
 `Marshal` (and any serialization path) emits only values explicitly set on

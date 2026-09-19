@@ -80,6 +80,29 @@ func TestCheckFileContentDrift_SkipsConfigYaml(t *testing.T) {
 	}
 }
 
+func TestCheckFileContentDrift_SkipsConfigBaseYaml(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.FileContents["owner/repo/.fullsend/config.base.yaml"] = []byte("old base")
+
+	expected := []forge.TreeFile{
+		{Path: ".fullsend/config.base.yaml", Content: []byte("new base")},
+	}
+
+	ghFC := GitHubForgeConfig()
+	ghFC.Client = fc
+
+	drifted, err := CheckFileContentDrift(
+		context.Background(), fc, "owner", "repo",
+		ghFC, ForgeGitHub, expected,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(drifted) != 0 {
+		t.Errorf("expected 0 drifted files (config.base.yaml skipped), got %d", len(drifted))
+	}
+}
+
 func TestCheckFileContentDrift_SkipsMissingFiles(t *testing.T) {
 	fc := forge.NewFakeClient()
 	// File does not exist on forge.

@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	"github.com/fullsend-ai/fullsend/internal/poll"
 	"github.com/fullsend-ai/fullsend/internal/scaffold"
@@ -577,6 +579,95 @@ func TestBuildScaffoldFiles(t *testing.T) {
 	}
 	if !hasConfig {
 		t.Error("expected .fullsend/config.yaml in scaffold files")
+	}
+}
+
+func TestBuildScaffoldFiles_WithPreset(t *testing.T) {
+	cfg := baseCfg()
+	cfg.Preset = []byte(testPresetYAML)
+
+	files, err := BuildScaffoldFiles(cfg)
+	if err != nil {
+		t.Fatalf("BuildScaffoldFiles() returned error: %v", err)
+	}
+
+	var hasOverlay, hasBase bool
+	for _, f := range files {
+		switch f.Path {
+		case ".fullsend/config.yaml":
+			hasOverlay = true
+		case ".fullsend/config.base.yaml":
+			hasBase = true
+			if string(f.Content) != testPresetYAML {
+				t.Errorf("base content = %q, want preset bytes", f.Content)
+			}
+		}
+	}
+	if !hasOverlay {
+		t.Error("expected .fullsend/config.yaml overlay")
+	}
+	if !hasBase {
+		t.Error("expected .fullsend/config.base.yaml from preset")
+	}
+}
+
+// TestBuildScaffoldFiles_PresetOverlayDoesNotShadowPresetRoles guards
+// against a fresh install with a declared preset materializing default
+// roles/allowed_remote_resources into the .fullsend/config.yaml overlay.
+// Layered accessors prefer the overlay over the base, so a fully
+// populated overlay (as NewPerRepoConfig produces) would silently shadow
+// the preset's own roles/allowed_remote_resources — the same bug
+// `github setup --config` avoids via buildPresetOverlay's stub overlay.
+// When the caller did not explicitly request roles (cfg.Roles is empty,
+// matching converge.go's fresh-install path when --roles was not
+// passed), the overlay must leave roles/allowed_remote_resources unset
+// so the preset's values take effect through the overlay -> base
+// fallback chain.
+func TestBuildScaffoldFiles_PresetOverlayDoesNotShadowPresetRoles(t *testing.T) {
+	cfg := baseCfg()
+	cfg.Roles = nil // no explicit --roles override
+	presetYAML := "version: \"1\"\n" +
+		"roles:\n  - triage\n  - review\n" +
+		"allowed_remote_resources:\n  - https://raw.githubusercontent.com/acme/private-agents/\n"
+	cfg.Preset = []byte(presetYAML)
+
+	files, err := BuildScaffoldFiles(cfg)
+	if err != nil {
+		t.Fatalf("BuildScaffoldFiles() returned error: %v", err)
+	}
+
+	var overlayYAML, baseYAML []byte
+	for _, f := range files {
+		switch f.Path {
+		case ".fullsend/config.yaml":
+			overlayYAML = f.Content
+		case ".fullsend/config.base.yaml":
+			baseYAML = f.Content
+		}
+	}
+	if overlayYAML == nil {
+		t.Fatal("expected .fullsend/config.yaml overlay")
+	}
+	if baseYAML == nil {
+		t.Fatal("expected .fullsend/config.base.yaml from preset")
+	}
+
+	if strings.Contains(string(overlayYAML), "roles:") {
+		t.Errorf("overlay must not set roles when the preset owns them: %s", overlayYAML)
+	}
+	if strings.Contains(string(overlayYAML), "allowed_remote_resources:") {
+		t.Errorf("overlay must not set allowed_remote_resources when the preset owns them: %s", overlayYAML)
+	}
+
+	effective, err := config.ParsePerRepoConfigWriterLayered(overlayYAML, baseYAML)
+	if err != nil {
+		t.Fatalf("composing layered config: %v", err)
+	}
+	if got, want := effective.ConfigRoles(), []string{"triage", "review"}; !slices.Equal(got, want) {
+		t.Errorf("effective roles = %v, want preset roles %v (preset must not be shadowed by default roles)", got, want)
+	}
+	if got := effective.AllowedResources(); !slices.Contains(got, "https://raw.githubusercontent.com/acme/private-agents/") {
+		t.Errorf("effective allowed_remote_resources = %v, want it to include the preset's entry", got)
 	}
 }
 

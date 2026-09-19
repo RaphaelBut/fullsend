@@ -9,9 +9,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +21,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/fullsend-ai/fullsend/internal/netutil"
 )
 
 const (
@@ -47,7 +51,7 @@ type Plan struct {
 // HTTPS URL. Returns the raw content bytes.
 func Fetch(ctx context.Context, source string) ([]byte, error) {
 	if strings.HasPrefix(strings.ToLower(source), "https://") {
-		return fetchHTTPS(ctx, source)
+		return fetchHTTPS(ctx, source, false)
 	}
 	if strings.Contains(source, "://") {
 		return nil, fmt.Errorf("unsupported URL scheme in preset source %q: only local paths and https:// URLs are supported", source)
@@ -104,12 +108,99 @@ func fetchLocal(path string) ([]byte, error) {
 	return data, nil
 }
 
-func fetchHTTPS(ctx context.Context, rawURL string) ([]byte, error) {
+// safeDialContext wraps a net.Dialer to reject connections to
+// internal/reserved IP addresses (loopback, link-local, private, etc.).
+// It resolves the target host, validates every resolved address, and
+// dials only the addresses that pass. Mirrors
+// internal/repos.safeDialContext, applied here to preset fetches.
+func safeDialContext(d *net.Dialer, skipIPCheck bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid address %q: %w", addr, err)
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("no addresses found for %q", host)
+		}
+		var safeIPs []net.IPAddr
+		for _, ip := range ips {
+			if skipIPCheck {
+				safeIPs = append(safeIPs, ip)
+			} else if reason := netutil.CheckIP(ip.IP); reason != "" {
+				continue
+			} else {
+				safeIPs = append(safeIPs, ip)
+			}
+		}
+		if len(safeIPs) == 0 {
+			return nil, fmt.Errorf("all resolved addresses for %q are blocked", host)
+		}
+		var lastErr error
+		for _, ip := range safeIPs {
+			conn, dialErr := d.DialContext(ctx, network, net.JoinHostPort(ip.IP.String(), port))
+			if dialErr == nil {
+				return conn, nil
+			}
+			lastErr = dialErr
+		}
+		return nil, lastErr
+	}
+}
+
+// fetchHTTPS retrieves preset YAML from an HTTPS URL with timeout, size
+// limit, and SSRF protections matching internal/repos.fetchManifestURL:
+// HTTP(S)_PROXY environment variables are ignored, DNS is resolved and
+// the resolved IPs are validated (rejecting loopback/link-local/private/
+// metadata addresses) before every dial — both the initial connection
+// and any HTTPS redirect hop share the same dialer, so redirects and
+// DNS-rebinding are covered too — and URLs carrying userinfo are
+// rejected. skipIPCheck bypasses the resolved-IP validation for tests
+// using httptest servers on loopback; production callers must always
+// go through Fetch, which passes skipIPCheck=false.
+func fetchHTTPS(ctx context.Context, rawURL string, skipIPCheck bool) ([]byte, error) {
+	return fetchHTTPSWithTLSConfig(ctx, rawURL, skipIPCheck, nil)
+}
+
+// fetchHTTPSWithTLSConfig is split out so tests can provide the trust roots
+// of an httptest TLS server without mutating http.DefaultTransport globally.
+// Production callers must use fetchHTTPS.
+func fetchHTTPSWithTLSConfig(ctx context.Context, rawURL string, skipIPCheck bool, tlsConfig *tls.Config) ([]byte, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("fetching preset from %q: %w", rawURL, err)
+	}
+	if u.User != nil {
+		return nil, fmt.Errorf("preset URL must not contain userinfo, got %q", u.Redacted())
+	}
+
+	transport := &http.Transport{
+		Proxy: nil, // ignore HTTP(S)_PROXY env vars: a proxy could redirect
+		// the request to an internal host regardless of DNS/IP validation.
+		DialContext: safeDialContext(&net.Dialer{
+			Timeout: 10 * time.Second,
+		}, skipIPCheck),
+	}
+	// Preserve TLS trust settings (e.g. a test CA pool) from the default
+	// transport; only dialing and proxying behavior are hardened here.
+	if tlsConfig != nil {
+		transport.TLSClientConfig = tlsConfig.Clone()
+	} else if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport.TLSClientConfig = base.TLSClientConfig.Clone()
+	}
+
 	client := &http.Client{
-		Timeout: fetchTimeout,
+		Timeout:   fetchTimeout,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if req.URL.Scheme != "https" {
 				return fmt.Errorf("preset redirect to non-HTTPS URL %q is not allowed", req.URL.Redacted())
+			}
+			if req.URL.User != nil {
+				return fmt.Errorf("preset redirect URL must not contain userinfo, got %q", req.URL.Redacted())
 			}
 			if len(via) >= 10 {
 				return fmt.Errorf("too many redirects")
@@ -122,7 +213,7 @@ func fetchHTTPS(ctx context.Context, rawURL string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching preset from %q: %w", rawURL, err)
 	}
-	resp, err := client.Do(req) //nolint:gosec // URL is user-provided via --config / repos.yaml
+	resp, err := client.Do(req) //nolint:gosec // URL is user-provided via --config / repos.yaml; SSRF-hardened via safeDialContext
 	if err != nil {
 		return nil, fmt.Errorf("fetching preset from %q: %w", rawURL, err)
 	}
@@ -145,13 +236,13 @@ func fetchHTTPS(ctx context.Context, rawURL string) ([]byte, error) {
 	return data, nil
 }
 
-// IsRemote reports whether source is a URL rather than a local path.
+// IsRemote reports whether source is a URL rather than a local path,
+// matching the schemes Fetch itself treats as remote (https:// only).
+// A bare scheme check via url.Parse would misclassify strings such as a
+// Windows-style path ("C:\presets\org.yaml", scheme "C") as remote even
+// though Fetch treats them as local paths.
 func IsRemote(source string) bool {
-	u, err := url.Parse(source)
-	if err != nil {
-		return false
-	}
-	return u.Scheme != ""
+	return strings.HasPrefix(strings.ToLower(source), "https://")
 }
 
 // ValidateYAML checks that data is syntactically valid YAML.

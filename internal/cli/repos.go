@@ -263,7 +263,7 @@ func newReposStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Compare manifest against actual repo state",
-		Long:  "Read-only comparison of the repos.yaml manifest against actual forge state. Reports installation status and configuration drift for each repo.",
+		Long:  "Read-only comparison of the repos.yaml manifest against actual forge state. Reports installation status and configuration drift for each repo, including declared configuration-preset drift against .fullsend/config.base.yaml.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runReposStatus(cmd, manifest, jsonOutput, repoFilter, concurrency)
 		},
@@ -411,15 +411,16 @@ func printStatusTable(cmd *cobra.Command, result *repos.StatusResult) {
 // reposInstallConfig holds flags and test overrides for repos install.
 type reposInstallConfig struct {
 	// Core flags
-	manifest    string
-	dryRun      bool
-	repoFilter  []string
-	concurrency int
-	roles       []string
-	direct      bool
-	force       bool
-	gitlabToken string
-	forge       string
+	manifest     string
+	dryRun       bool
+	repoFilter   []string
+	concurrency  int
+	roles        []string
+	rolesChanged bool
+	direct       bool
+	force        bool
+	gitlabToken  string
+	forge        string
 
 	// GCP credentials (install-time only)
 	inferenceProject       string
@@ -460,7 +461,8 @@ For repos not yet in the manifest, adds them (requires --forge). For repos
 whose shim workflow is not yet on the default branch, scaffolds workflow
 files and writes variables/secrets onto the initialization branch, including
 re-runs while an initialization PR/MR is still open. For repos whose workflow
-is already on the default branch, reconciles variable drift and upgrades
+is already on the default branch, reconciles variable drift, declared
+configuration-preset drift against .fullsend/config.base.yaml, and upgrades
 scaffold refs to match the manifest.
 
 When repos are specified as positional arguments, only those repos are
@@ -480,6 +482,7 @@ GCP infrastructure (WIF, mint) must be provisioned separately via
 				return err
 			}
 			opts.vendorChanged = cmd.Flags().Changed("vendor")
+			opts.rolesChanged = cmd.Flags().Changed("roles")
 			return runReposInstall(cmd.Context(), opts)
 		},
 	}
@@ -827,6 +830,7 @@ func runReposInstall(ctx context.Context, opts *reposInstallConfig) error {
 		RepoFilter:             opts.repoFilter,
 		MaxConcurrency:         opts.concurrency,
 		Roles:                  opts.roles,
+		RolesExplicit:          opts.rolesChanged,
 		UpstreamRef:            upstreamRef,
 		UpstreamTag:            upstreamTag,
 		Direct:                 opts.direct,

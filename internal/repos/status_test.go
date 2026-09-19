@@ -1700,3 +1700,96 @@ func TestStatus_GitLab_MissingSchedules_ReportsDrift(t *testing.T) {
 		t.Errorf("expected event-poll drift in status, got drifts: %v", result.Repos[0].Drifts)
 	}
 }
+
+func TestStatus_ConfigPresetDrift(t *testing.T) {
+	presetPath := writePresetFile(t, testPresetYAML)
+	fc := forge.NewFakeClient()
+	m := newTestManifest()
+	m.Defaults.Config = presetPath
+
+	populateInstalledRepo(t, fc, "acme-corp", "api-server", "v2.3.0",
+		"https://mint.example.com", "us-central1")
+	populateInstalledRepo(t, fc, "acme-corp", "web-frontend", "v2.3.0",
+		"https://mint.example.com", "us-central1")
+	fc.FileContents["acme-corp/api-server/.fullsend/config.base.yaml"] = []byte(testPresetYAML)
+	fc.FileContents["acme-corp/web-frontend/.fullsend/config.base.yaml"] = []byte("version: \"1\"\nruntime: pi\n")
+
+	result, err := Status(context.Background(), m, newTestClientFactory(fc), 4, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Summary.Drifted != 1 {
+		t.Errorf("drifted = %d, want 1", result.Summary.Drifted)
+	}
+
+	for _, s := range result.Repos {
+		switch s.Repo {
+		case "api-server":
+			if len(s.Drifts) != 0 {
+				t.Errorf("api-server: want no drifts, got %v", s.Drifts)
+			}
+		case "web-frontend":
+			var found bool
+			for _, d := range s.Drifts {
+				if d.Field == ".fullsend/config.base.yaml" {
+					found = true
+					if d.Expected != "declared preset" {
+						t.Errorf("expected declared preset, got %q", d.Expected)
+					}
+				}
+			}
+			if !found {
+				t.Errorf("web-frontend: expected config.base.yaml drift, got %v", s.Drifts)
+			}
+		}
+	}
+}
+
+func TestStatus_NoPresetDoesNotCompareBase(t *testing.T) {
+	fc := forge.NewFakeClient()
+	m := newTestManifest()
+
+	populateInstalledRepo(t, fc, "acme-corp", "api-server", "v2.3.0",
+		"https://mint.example.com", "us-central1")
+	populateInstalledRepo(t, fc, "acme-corp", "web-frontend", "v2.3.0",
+		"https://mint.example.com", "us-central1")
+	fc.FileContents["acme-corp/api-server/.fullsend/config.base.yaml"] = []byte(testPresetYAML)
+
+	result, err := Status(context.Background(), m, newTestClientFactory(fc), 4, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Summary.Drifted != 0 {
+		t.Errorf("drifted = %d, want 0 when no preset is declared", result.Summary.Drifted)
+	}
+}
+
+func TestStatus_GitLab_ConfigPresetDrift(t *testing.T) {
+	presetPath := writePresetFile(t, testPresetYAML)
+	fc := forge.NewFakeClient()
+	m := &Manifest{
+		Version:  1,
+		Defaults: DefaultsConfig{Config: presetPath},
+		GitLab: &PlatformConfig{
+			URL:         "https://gitlab.example.com",
+			FullsendRef: "v2.5.0",
+			Repos:       []RepoEntry{{Name: "acme/api"}},
+		},
+	}
+	populateGitLabInstalled(fc, "acme", "api")
+	fc.FileContents["acme/api/.fullsend/config.base.yaml"] = []byte("version: \"1\"\nruntime: pi\n")
+
+	result, err := Status(context.Background(), m, newTestClientFactory(fc), 4, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var found bool
+	for _, d := range result.Repos[0].Drifts {
+		if d.Field == ".fullsend/config.base.yaml" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("GitLab status must report config.base.yaml drift, got %v", result.Repos[0].Drifts)
+	}
+}

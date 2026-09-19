@@ -159,6 +159,7 @@ func Status(ctx context.Context, manifest *Manifest, clients ForgeClientFactory,
 	results := make([]RepoStatus, len(resolved))
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
+	store := newPresetCache()
 
 	for i, rr := range resolved {
 		select {
@@ -183,7 +184,7 @@ func Status(ctx context.Context, manifest *Manifest, clients ForgeClientFactory,
 				return
 			}
 			cfg.ForgeConfig = fc
-			status := checkRepoStatus(ctx, cfg, dcfg, refResolver)
+			status := checkRepoStatus(ctx, cfg, dcfg, refResolver, store)
 			results[idx] = status
 		}(i, rr)
 	}
@@ -207,7 +208,7 @@ func Status(ctx context.Context, manifest *Manifest, clients ForgeClientFactory,
 	return &StatusResult{Repos: results, Summary: summary, Warnings: warnings}, nil
 }
 
-func checkRepoStatus(ctx context.Context, cfg ResolvedConfig, dcfg DriftConfig, resolver *RefResolver) RepoStatus {
+func checkRepoStatus(ctx context.Context, cfg ResolvedConfig, dcfg DriftConfig, resolver *RefResolver, store *presetCache) RepoStatus {
 	owner := cfg.Owner
 	repo := cfg.Repo
 	client := cfg.ForgeConfig.Client
@@ -307,6 +308,11 @@ func checkRepoStatus(ctx context.Context, cfg ResolvedConfig, dcfg DriftConfig, 
 	// ref-format differences do not produce false content-drift reports —
 	// ref drift is already detected separately.
 	checkScaffoldContentDrift(ctx, client, cfg, dcfg, resolver, &status)
+	if status.Error != "" {
+		return status
+	}
+
+	checkPresetDrift(ctx, cfg, store, &status)
 	if status.Error != "" {
 		return status
 	}
