@@ -6,6 +6,7 @@ package repos
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -66,6 +67,12 @@ type Manifest struct {
 	Defaults DefaultsConfig  `yaml:"defaults,omitempty"`
 	GitHub   *PlatformConfig `yaml:"github,omitempty"`
 	GitLab   *PlatformConfig `yaml:"gitlab,omitempty"`
+
+	// sourceRemote and sourceDir are set only when the manifest is loaded
+	// through LoadManifest. They keep config preset paths tied to the
+	// manifest's trust boundary without affecting manifests built in memory.
+	sourceRemote bool
+	sourceDir    string
 }
 
 // PlatformConfig holds per-platform infrastructure settings and the
@@ -98,6 +105,33 @@ type RepoEntry struct {
 	// Vendor overrides the default vendor setting for this repo.
 	// nil inherits defaults.vendor; non-nil overrides it.
 	Vendor *bool `yaml:"vendor,omitempty"`
+	// Config is a local file path or HTTPS URL of a configuration
+	// preset written as .fullsend/config.base.yaml. Empty inherits
+	// defaults.config; "none" disables inheritance.
+	Config string `yaml:"config,omitempty"`
+	// ConfigHash is an optional SHA-256 hex digest used to validate
+	// the fetched preset, matching github setup --config-hash.
+	// Empty inherits defaults.config_hash; "none" skips validation.
+	ConfigHash string `yaml:"config_hash,omitempty"`
+
+	// resolvedConfig caches the manifest-directory-relative absolute
+	// path Validate computed for a local Config source. It is set only
+	// by Validate and is never marshaled, so the user-facing Config
+	// string written back to repos.yaml (e.g. by AddToManifest or
+	// RemoveFromManifest) always stays the original relative path or
+	// HTTPS URL the operator wrote.
+	resolvedConfig string
+}
+
+// configSource returns the source to use when actually fetching the
+// preset: the manifest-relative absolute path Validate resolved for a
+// local Config, or the raw Config value (empty, "none", or an HTTPS
+// URL) when no local-path resolution applies.
+func (e RepoEntry) configSource() string {
+	if e.resolvedConfig != "" {
+		return e.resolvedConfig
+	}
+	return e.Config
 }
 
 // DefaultsConfig holds default field values applied to every repo
@@ -109,6 +143,25 @@ type DefaultsConfig struct {
 	// Vendor, when true, vendors the fullsend binary and content into
 	// each repo so CI does not need network access to fetch them.
 	Vendor *bool `yaml:"vendor,omitempty"`
+	// Config is the default configuration preset source (local path or
+	// HTTPS URL) written as .fullsend/config.base.yaml.
+	Config string `yaml:"config,omitempty"`
+	// ConfigHash is the default SHA-256 hex digest for Config.
+	ConfigHash string `yaml:"config_hash,omitempty"`
+
+	// resolvedConfig caches the manifest-directory-relative absolute
+	// path Validate computed for a local Config source. See
+	// RepoEntry.resolvedConfig for why this is never marshaled.
+	resolvedConfig string
+}
+
+// configSource returns the source to use when actually fetching the
+// preset. See RepoEntry.configSource.
+func (d DefaultsConfig) configSource() string {
+	if d.resolvedConfig != "" {
+		return d.resolvedConfig
+	}
+	return d.Config
 }
 
 // DefaultGitHubURL is the default forge URL for GitHub.com.
@@ -142,6 +195,12 @@ type ResolvedConfig struct {
 	// Vendor is true when the fullsend binary and content should be
 	// vendored into the repo for offline CI.
 	Vendor bool
+	// Config is the resolved preset source; empty means no preset is
+	// declared and an existing base file is preserved without comparison.
+	Config string
+	// ConfigHash is the resolved SHA-256 hex digest; empty skips
+	// digest validation.
+	ConfigHash string
 }
 
 func parseManifestBytes(data []byte, m *Manifest) error {
@@ -159,8 +218,11 @@ func parseManifestBytes(data []byte, m *Manifest) error {
 func LoadManifest(ctx context.Context, pathOrURL string) (*Manifest, error) {
 	var data []byte
 	var err error
+	var sourceDir string
+	var sourceRemote bool
 
 	if strings.HasPrefix(pathOrURL, "https://") {
+		sourceRemote = true
 		data, err = fetchManifestURL(ctx, pathOrURL, false)
 		if err != nil {
 			return nil, err
@@ -168,8 +230,6 @@ func LoadManifest(ctx context.Context, pathOrURL string) (*Manifest, error) {
 	} else if strings.HasPrefix(pathOrURL, "http://") {
 		return nil, fmt.Errorf("insecure http:// not supported; use https://")
 	} else {
-		// Path is caller-controlled; no sanitization is performed here.
-		// Callers must ensure the path is safe before passing it in.
 		f, err := os.Open(pathOrURL)
 		if err != nil {
 			return nil, fmt.Errorf("reading manifest file %s: %w", pathOrURL, err)
@@ -183,12 +243,19 @@ func LoadManifest(ctx context.Context, pathOrURL string) (*Manifest, error) {
 		if int64(len(data)) > maxManifestBytes {
 			return nil, fmt.Errorf("manifest file %s exceeds maximum size of %d bytes", pathOrURL, maxManifestBytes)
 		}
+		absolutePath, absErr := filepath.Abs(pathOrURL)
+		if absErr != nil {
+			return nil, fmt.Errorf("resolving manifest file %s: %w", pathOrURL, absErr)
+		}
+		sourceDir = filepath.Dir(absolutePath)
 	}
 
 	var m Manifest
 	if err := parseManifestBytes(data, &m); err != nil {
 		return nil, fmt.Errorf("parsing manifest YAML: %w", err)
 	}
+	m.sourceRemote = sourceRemote
+	m.sourceDir = sourceDir
 
 	return &m, nil
 }
@@ -352,6 +419,21 @@ func (m *Manifest) Validate() error {
 	if err := validateRuntimeValue("defaults.runtime", m.Defaults.Runtime); err != nil {
 		return err
 	}
+	var err error
+	// validateConfigSource resolves a local Config path to a manifest-
+	// directory-relative absolute path for containment checking; that
+	// resolved value is cached on resolvedConfig for later fetches and
+	// must not overwrite the user-facing Config field, which is what
+	// AddToManifest/RemoveFromManifest marshal back to repos.yaml.
+	if m.Defaults.resolvedConfig, err = m.validateConfigSource("defaults.config", m.Defaults.Config); err != nil {
+		return err
+	}
+	if err := validateConfigHash("defaults.config_hash", m.Defaults.ConfigHash); err != nil {
+		return err
+	}
+	if configHashSet(m.Defaults.ConfigHash) && !configSourceSet(m.Defaults.Config) {
+		return fmt.Errorf("defaults.config_hash is set without defaults.config")
+	}
 	for _, p := range []struct {
 		name string
 		cfg  *PlatformConfig
@@ -359,8 +441,12 @@ func (m *Manifest) Validate() error {
 		if p.cfg == nil {
 			continue
 		}
-		for _, e := range p.cfg.Repos {
+		for i := range p.cfg.Repos {
+			e := &p.cfg.Repos[i]
 			if err := validateRuntimeValue(fmt.Sprintf("%s.repos[%s].runtime", p.name, e.Name), e.Runtime); err != nil {
+				return err
+			}
+			if e.resolvedConfig, err = m.validateConfigSource(fmt.Sprintf("%s.repos[%d].config", p.name, i), e.Config); err != nil {
 				return err
 			}
 		}
@@ -523,6 +609,21 @@ func (m *Manifest) validatePlatformRepos(forgeName string, platform *PlatformCon
 		// Validate per-repo fullsend_ref override.
 		if entry.FullsendRef != "" && entry.FullsendRef != NoneSentinel && !IsValidRef(entry.FullsendRef) {
 			return fmt.Errorf("%s.repos[%d]: per-repo fullsend_ref %q contains invalid characters; only alphanumeric, dot, underscore, and hyphen are allowed", forgeName, i, entry.FullsendRef)
+		}
+
+		if _, err := m.validateConfigSource(fmt.Sprintf("%s.repos[%d].config", forgeName, i), entry.Config); err != nil {
+			return err
+		}
+		if err := validateConfigHash(fmt.Sprintf("%s.repos[%d].config_hash", forgeName, i), entry.ConfigHash); err != nil {
+			return err
+		}
+		if configHashSet(entry.ConfigHash) && entry.Config == NoneSentinel {
+			return fmt.Errorf("%s.repos[%d]: config_hash is set but config is %q", forgeName, i, NoneSentinel)
+		}
+		resolvedConfig := resolveField(entry.Config, m.Defaults.Config, "")
+		resolvedHash := resolveField(entry.ConfigHash, m.Defaults.ConfigHash, "")
+		if resolvedConfig == "" && configHashSet(resolvedHash) && entry.Config != NoneSentinel {
+			return fmt.Errorf("%s.repos[%d]: config_hash is set but no config source is declared", forgeName, i)
 		}
 
 		// Check for duplicates within this platform (case-insensitive).
@@ -774,6 +875,19 @@ func (m *Manifest) resolveWithEntry(owner, repo, forgeName string, platform *Pla
 	cfg.Runtime = resolveField(entry.Runtime, m.Defaults.Runtime, "")
 	// Vendor: per-repo *bool overrides defaults *bool; default is false.
 	cfg.Vendor = resolveBoolField(entry.Vendor, m.Defaults.Vendor, false)
+	// Config: per-repo overrides defaults; "none" disables the preset.
+	// A resolved empty source drops the hash so callers do not validate
+	// a digest against an unspecified document. configSource() returns
+	// the Validate-resolved absolute path for a local preset (falling
+	// back to the raw value for "", "none", and HTTPS sources) so a
+	// preset declared as a manifest-relative path fetches correctly
+	// without mutating the user-facing Config field.
+	cfg.Config = resolveField(entry.configSource(), m.Defaults.configSource(), "")
+	if cfg.Config == "" {
+		cfg.ConfigHash = ""
+	} else {
+		cfg.ConfigHash = resolveField(entry.ConfigHash, m.Defaults.ConfigHash, "")
+	}
 
 	// Source infrastructure config from the platform-level section,
 	// with per-repo overrides via the string fallback chain.
@@ -930,6 +1044,90 @@ func IsNumeric(s string) bool {
 // Marshal serializes the manifest back to YAML.
 func (m *Manifest) Marshal() ([]byte, error) {
 	return yaml.Marshal(m)
+}
+
+func configSourceSet(s string) bool {
+	return s != "" && s != NoneSentinel
+}
+
+func configHashSet(s string) bool {
+	return s != "" && s != NoneSentinel
+}
+
+func validateConfigSource(field, source string) error {
+	if source == "" || source == NoneSentinel {
+		return nil
+	}
+	if strings.HasPrefix(strings.ToLower(source), "https://") {
+		u, err := url.Parse(source)
+		if err != nil || u.Host == "" {
+			return fmt.Errorf("%s must be a valid HTTPS URL or local file path, got %q", field, source)
+		}
+		return nil
+	}
+	if strings.Contains(source, "://") {
+		return fmt.Errorf("%s: unsupported URL scheme: only local paths and https:// URLs are supported", field)
+	}
+	return nil
+}
+
+func (m *Manifest) validateConfigSource(field, source string) (string, error) {
+	if err := validateConfigSource(field, source); err != nil {
+		return "", err
+	}
+	if source == "" || source == NoneSentinel || strings.HasPrefix(strings.ToLower(source), "https://") {
+		if m.sourceRemote && source != "" && source != NoneSentinel && !strings.HasPrefix(strings.ToLower(source), "https://") {
+			return "", fmt.Errorf("%s: remote manifests must use HTTPS config sources, got local path %q", field, source)
+		}
+		return source, nil
+	}
+	if m.sourceRemote {
+		return "", fmt.Errorf("%s: remote manifests must use HTTPS config sources, got local path %q", field, source)
+	}
+	if m.sourceDir == "" {
+		return source, nil
+	}
+
+	base, err := filepath.Abs(m.sourceDir)
+	if err != nil {
+		return "", fmt.Errorf("%s: resolving manifest directory: %w", field, err)
+	}
+	if canonicalBase, evalErr := filepath.EvalSymlinks(base); evalErr == nil {
+		base = canonicalBase
+	}
+	resolved := source
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(base, resolved)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("%s: resolving local config path %q: %w", field, source, err)
+	}
+	checked := resolved
+	if canonicalPath, evalErr := filepath.EvalSymlinks(resolved); evalErr == nil {
+		checked = canonicalPath
+	} else if canonicalParent, parentErr := filepath.EvalSymlinks(filepath.Dir(resolved)); parentErr == nil {
+		checked = filepath.Join(canonicalParent, filepath.Base(resolved))
+	}
+	rel, err := filepath.Rel(base, checked)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s: local config path %q escapes manifest directory %q", field, source, base)
+	}
+	return resolved, nil
+}
+
+func validateConfigHash(field, hash string) error {
+	if hash == "" || hash == NoneSentinel {
+		return nil
+	}
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if len(hash) != 64 {
+		return fmt.Errorf("%s must be a 64-character hex-encoded SHA-256 hash, got %d characters", field, len(hash))
+	}
+	if _, err := hex.DecodeString(hash); err != nil {
+		return fmt.Errorf("%s is not valid hex: %w", field, err)
+	}
+	return nil
 }
 
 // validateRuntimeValue accepts an empty value (inherit), the "none" sentinel

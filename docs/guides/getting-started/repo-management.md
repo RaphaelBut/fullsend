@@ -120,8 +120,50 @@ github:
 ```
 
 The `none` sentinel works for string fields (`fullsend_ref`,
-`mint_url`, `mint_mode`). List fields like `allowed_remote_resources`
-are managed at the `defaults` level and cannot be cleared per-repo.
+`mint_url`, `mint_mode`, `config`, `config_hash`). List fields like
+`allowed_remote_resources` are managed at the `defaults` level and
+cannot be cleared per-repo.
+
+### Configuration presets
+
+`repos.yaml` can declare a configuration preset so fleet installs
+reproduce `github setup --config`. The preset is a local file or HTTPS
+URL written byte-for-byte as `.fullsend/config.base.yaml`.
+`.fullsend/config.yaml` remains the repository-local overlay and is not
+merged with the preset.
+
+```yaml
+version: 1
+defaults:
+  config: https://example.com/presets/org.yaml
+  config_hash: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+github:
+  repos:
+    - name: acme/api          # inherits the fleet preset
+    - name: acme/special
+      config: ./special.yaml  # per-repo override (path is relative to repos.yaml's directory)
+      config_hash: none       # do not apply the fleet hash to this source
+    - name: acme/legacy
+      config: none            # disable inheritance; existing base is preserved
+```
+
+`config_hash` is optional. When set, it must be a 64-character SHA-256
+hex digest of the fetched content, matching `github setup --config-hash`.
+A per-repo `config` override still inherits `defaults.config_hash` unless
+you set `config_hash` on that entry (`none` skips validation). A hash
+mismatch or invalid source fails before any files are written. Remote
+presets without a hash are accepted, but content integrity is not
+verified. Local preset paths are resolved relative to the directory
+containing `repos.yaml`, not the process working directory, and must
+stay within that directory (`../` paths that escape it are rejected).
+A manifest loaded from an HTTPS URL must declare preset sources as
+HTTPS URLs; local preset paths are not allowed in that case.
+
+Changing the declared preset replaces the complete base file. Repeated
+installs are idempotent when the desired bytes already match. If no
+preset is declared, an existing `.fullsend/config.base.yaml` is left
+alone and is not compared. `repos status` reports base-file drift only
+when a preset is declared. The same path applies to GitHub and GitLab.
 
 ### Manifest paths and URLs
 
@@ -162,10 +204,11 @@ Install runs in two phases:
    still updates the same initialization PR/MR rather than opening a
    separate upgrade PR. Repos whose workflow is already on the default
    branch are checked for component drift (workflow, thin callers,
-   variables, secrets, pipeline schedules), scaffold content drift, and
-   scaffold ref drift. Missing or drifted components are repaired
-   automatically; ref updates are committed as PRs (or direct pushes
-   with `--direct`).
+   variables, secrets, pipeline schedules), scaffold content drift,
+   scaffold ref drift, and declared configuration-preset drift against
+   `.fullsend/config.base.yaml`. Missing or drifted components are
+   repaired automatically; ref updates are committed as PRs (or direct
+   pushes with `--direct`).
 
 > **Prerequisite:** GCP WIF provisioning (`fullsend inference provision`)
 > must be completed before running install. For self-managed mints,
@@ -226,7 +269,8 @@ fullsend repos status -f repos.yaml --json
 
 Run `repos install` to detect and fix component drift (workflow, thin
 callers, variables, secrets, pipeline schedules), scaffold ref drift,
-and scaffold content drift across all manifest repos:
+scaffold content drift, and declared configuration-preset drift across
+all manifest repos:
 
 ```bash
 fullsend repos install -f repos.yaml
@@ -239,9 +283,11 @@ fullsend repos install -f repos.yaml --dry-run
 ```
 
 The convergence phase checks all components (workflow, thin callers,
-variables, secrets, pipeline schedules), scaffold content drift, and scaffold workflow refs
-against the manifest. Missing or drifted components are repaired
-automatically; ref updates are committed as PRs (or direct pushes with
+variables, secrets, pipeline schedules), scaffold content drift, declared
+configuration-preset drift, and scaffold workflow refs against the
+manifest. Missing or drifted components are repaired automatically; a
+changed preset replaces only `.fullsend/config.base.yaml` and leaves the
+overlay intact. Ref updates are committed as PRs (or direct pushes with
 `--direct`).
 
 Use `repos status` for a read-only drift report (no changes applied):

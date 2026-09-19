@@ -90,7 +90,7 @@ required in this case. This enables a greenfield setup without running
 Runs in two phases:
 
 1. **Manifest add** — repos specified as positional arguments that are not already in the manifest are added (`--forge` is required when the target platform cannot be inferred). Per-repo overrides (`--inference-region`, `--fullsend-ref`, `--mint-url`, `--allowed-remote-resources`, `--runtime`) are written to the manifest entry.
-2. **Converge** — all manifest repos are converged through a unified probe → diff → apply pipeline. Repos whose shim workflow is not yet on the default branch are freshly installed (scaffold files, variables, secrets) onto the initialization branch (`fullsend/scaffold-install`). That includes a re-run while the initialization PR/MR is still open: variables and secrets may already exist from the first run, but the installer still updates the same initialization PR rather than opening a competing upgrade PR. Repos whose workflow is already on the default branch are checked for drift (workflow, thin callers, variables, secrets, pipeline schedules — repaired automatically), scaffold content drift (repaired automatically), and scaffold ref drift (upgraded automatically).
+2. **Converge** — all manifest repos are converged through a unified probe → diff → apply pipeline. Repos whose shim workflow is not yet on the default branch are freshly installed (scaffold files, variables, secrets, and a declared configuration preset as `.fullsend/config.base.yaml`) onto the initialization branch (`fullsend/scaffold-install`). That includes a re-run while the initialization PR/MR is still open: variables and secrets may already exist from the first run, but the installer still updates the same initialization PR rather than opening a competing upgrade PR. Repos whose workflow is already on the default branch are checked for drift (workflow, thin callers, variables, secrets, pipeline schedules — repaired automatically), scaffold content drift (repaired automatically), declared configuration-preset drift against `.fullsend/config.base.yaml` (replaced wholesale; `.fullsend/config.yaml` is preserved), and scaffold ref drift (upgraded automatically).
 
 ```bash
 fullsend repos install -f repos.yaml
@@ -148,7 +148,7 @@ fullsend repos install group/subgroup/project --forge gitlab --gitlab-bot-token 
 
 ### Common workflows
 
-Converge all repos from a manifest (provision new, repair component drift, repair scaffold content drift, upgrade refs):
+Converge all repos from a manifest (provision new, repair component drift, repair scaffold content drift, refresh a declared configuration preset, upgrade refs):
 
 ```bash
 fullsend repos install -f repos.yaml
@@ -180,7 +180,7 @@ fullsend repos install group/project --forge gitlab --gitlab-url https://gitlab.
 
 ## `repos status`
 
-Read-only comparison of the `repos.yaml` manifest against actual forge state. Reports installation status and configuration drift for each repo.
+Read-only comparison of the `repos.yaml` manifest against actual forge state. Reports installation status and configuration drift for each repo, including declared configuration-preset drift against `.fullsend/config.base.yaml`.
 
 ```bash
 fullsend repos status
@@ -285,6 +285,8 @@ fullsend repos set-default github.mint_url ""   # removes the key
 | `defaults.allowed_remote_resources` | comma-separated URLs | URL prefixes allowed for remote resources (agents, policies, skills, plugins, profiles, providers, and base composition) |
 | `defaults.runtime` | `claude`, `pi` or `codex` | Agent runtime written as each repo's `runtime:` at install; a per-entry `runtime` overrides it (`none` stops the chain) |
 | `defaults.vendor` | `true` or `false` | Vendor fullsend binary and content into each repo for offline CI; per-entry `vendor` overrides it. Currently GitHub-only; GitLab CI templates do not yet reference the vendored binary. |
+| `defaults.config` | local path or HTTPS URL | Configuration preset written as `.fullsend/config.base.yaml`; a per-entry `config` overrides it (`none` disables inheritance). A local path is resolved relative to `repos.yaml`'s directory and must not escape it; manifests loaded from an HTTPS URL must use an HTTPS preset URL. Fetch/validation semantics otherwise match `github setup --config`. |
+| `defaults.config_hash` | 64-character SHA-256 hex | Optional digest that validates the fetched preset; a per-entry `config_hash` overrides it (`none` skips validation). Same semantics as `github setup --config-hash`. |
 | `github.url` | URL | GitHub instance URL (default: `https://github.com`) |
 | `github.mint_url` | URL | Token mint service URL (defaults to `https://mint.fullsend.sh` in public mode) |
 | `github.mint_mode` | `public` or `private` | Controls the default mint URL: `public` defaults to `https://mint.fullsend.sh`; `private` requires an explicit `mint_url` (default: `public`) |
