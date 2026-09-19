@@ -22,6 +22,8 @@
 #   PR_AUTHOR_LOGIN — github.event.pull_request.user.login
 #   PR_UPDATED_AT — github.event.pull_request.updated_at
 #   EVENT_ACTION  — github.event.action
+#   LABEL_ACTOR_LOGIN — github.event.sender.login (who applied the label on
+#     labeled events)
 #
 # Writes authorized, reason, and label_removed to GITHUB_OUTPUT when set.
 # Exits 0 always; callers inspect outputs.
@@ -152,14 +154,27 @@ fi
 # A label is an authorization boundary: the user who last applied ok-to-test
 # must currently have write+ permission. Triage-role users can apply labels
 # without it, so the label alone does not prove a maintainer approved the run.
-if [[ "${reason}" == "ok_to_test" ]]; then
+latest_labeler() {
   if [[ -z "${events_json:-}" ]]; then
-    events_json="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/events" --paginate | jq -s 'add // []')"
+    events_json="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/events" --paginate | jq -s 'add // []')" || return 1
   fi
-  labeler_login="$(jq -r --arg label "${OK_TO_TEST_LABEL}" '
+  jq -r --arg label "${OK_TO_TEST_LABEL}" '
     [.[] | select(.event == "labeled" and (.label.name // "") == $label)]
     | max_by(.created_at // "") | .actor.login // empty
-  ' <<<"${events_json}")"
+  ' <<<"${events_json}"
+}
+
+if [[ "${reason}" == "ok_to_test" ]]; then
+  # On labeled events the frozen payload names the labeler of this run. A
+  # later re-label by someone else must not authorize this run's head.
+  frozen_labeler=""
+  if [[ "${EVENT_ACTION:-}" == "labeled" ]]; then
+    frozen_labeler="${LABEL_ACTOR_LOGIN:-}"
+  fi
+  labeler_login="${frozen_labeler}"
+  if [[ -z "${labeler_login}" ]]; then
+    labeler_login="$(latest_labeler)"
+  fi
 
   # The API answers 200 for any user or bot, so a failed lookup is an API
   # error (reason=error via the ERR trap), not a denial.
@@ -169,10 +184,13 @@ if [[ "${reason}" == "ok_to_test" ]]; then
   fi
 
   # Remove the label so a maintainer's re-apply fires a new labeled event.
+  # Keep it when someone else has re-applied it since: that run decides.
   if ! is_write_role "${labeler_role}"; then
     authorized=false
     reason="untrusted_labeler"
-    remove_ok_to_test_label
+    if [[ -z "${frozen_labeler}" || "$(latest_labeler)" == "${frozen_labeler}" ]]; then
+      remove_ok_to_test_label
+    fi
   fi
 fi
 

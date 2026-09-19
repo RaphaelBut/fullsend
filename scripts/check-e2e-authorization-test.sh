@@ -104,7 +104,7 @@ export PATH="${MOCK_BIN}:${PATH}"
 export GH_TOKEN="test-token"
 export CHECK_E2E_AUTH_DRY_RUN="true"
 export GH_FAIL="false"
-unset EVENT_ACTION PR_UPDATED_AT PR_AUTHOR_LOGIN
+unset EVENT_ACTION PR_UPDATED_AT PR_AUTHOR_LOGIN LABEL_ACTOR_LOGIN
 
 run_case() {
   local name="$1"
@@ -249,6 +249,36 @@ run_case "later non-ok-to-test label by another user is ignored" "true" "ok_to_t
 
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z","actor":null}]'
 run_case "ok-to-test label event without actor denied" "false" "untrusted_labeler" "true"
+
+# On labeled events the frozen sender is the labeler: a later re-label by a
+# write user must not authorize the run the triage-role user started.
+export LABEL_ACTOR_LOGIN="triager"
+write_events '[
+  {"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z","actor":{"login":"triager"}},
+  {"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:05:00Z"}
+]'
+run_case "frozen untrusted sender denied, newer label kept" "false" "untrusted_labeler" "false"
+
+write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z","actor":{"login":"triager"}}]'
+run_case "frozen untrusted sender denied, own label removed" "false" "untrusted_labeler" "true"
+
+export LABEL_ACTOR_LOGIN="labeler"
+write_events '[]'
+run_case "frozen trusted sender authorizes without events lookup" "true" "ok_to_test" "false"
+if grep -q '/events' "${GH_LOG}"; then
+  echo "FAIL: frozen sender path should not call events API"
+  FAILURES=$((FAILURES + 1))
+else
+  echo "PASS: frozen sender path skips events API"
+fi
+
+# The sender of a non-labeled event (e.g. the pusher) is not the labeler.
+export EVENT_ACTION="synchronize"
+export PR_UPDATED_AT="2026-06-01T10:00:00Z"
+write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z","actor":{"login":"triager"}}]'
+run_case "sender ignored outside labeled events" "false" "untrusted_labeler" "true"
+unset LABEL_ACTOR_LOGIN PR_UPDATED_AT
+export EVENT_ACTION="labeled"
 
 # A failed labeler lookup is an API error, not a denial.
 write_events '[{"event":"labeled","label":{"name":"ok-to-test"},"created_at":"2026-06-01T11:00:00Z"}]'
