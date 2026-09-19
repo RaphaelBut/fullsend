@@ -12,19 +12,22 @@ import (
 
 // presetCache fetches and validates configuration presets once per
 // unique (source, hash) pair so a fleet of repos sharing defaults.config
-// does not re-download the same document.
+// does not re-download the same document. The fetch/validate itself runs
+// outside c.mu (see Load) so an in-flight load for one key never blocks
+// lookups or loads for other keys.
 type presetCache struct {
 	mu    sync.Mutex
-	items map[string]presetCacheEntry
+	items map[string]*presetCacheEntry
 }
 
 type presetCacheEntry struct {
+	once sync.Once
 	data []byte
 	err  error
 }
 
 func newPresetCache() *presetCache {
-	return &presetCache{items: make(map[string]presetCacheEntry)}
+	return &presetCache{items: make(map[string]*presetCacheEntry)}
 }
 
 func (c *presetCache) Load(ctx context.Context, source, hash string) ([]byte, error) {
@@ -33,13 +36,21 @@ func (c *presetCache) Load(ctx context.Context, source, hash string) ([]byte, er
 	}
 	key := source + "\x00" + hash
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if e, ok := c.items[key]; ok {
-		return e.data, e.err
+	e, ok := c.items[key]
+	if !ok {
+		e = &presetCacheEntry{}
+		c.items[key] = e
 	}
-	data, err := loadConfigPreset(ctx, source, hash)
-	c.items[key] = presetCacheEntry{data: data, err: err}
-	return data, err
+	c.mu.Unlock()
+
+	// The fetch/validate runs under the entry's own sync.Once, not c.mu,
+	// so concurrent Loads for other keys are never blocked by this one.
+	// Concurrent Loads for the same key block on the entry's Once (the
+	// intended single-flight behavior) rather than on the cache-wide lock.
+	e.once.Do(func() {
+		e.data, e.err = loadConfigPreset(ctx, source, hash)
+	})
+	return e.data, e.err
 }
 
 // loadConfigPreset fetches a preset via the shared preset package, then

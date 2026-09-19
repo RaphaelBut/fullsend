@@ -207,10 +207,17 @@ func TestValidateYAML_Invalid(t *testing.T) {
 
 func TestIsRemote(t *testing.T) {
 	assert.True(t, IsRemote("https://example.com/preset.yaml"))
-	assert.True(t, IsRemote("http://example.com/preset.yaml"))
+	// Fetch itself only ever treats https:// as remote: any other
+	// "://" scheme is an unsupported-scheme error, not a fetch. IsRemote
+	// mirrors that so it never disagrees with what Fetch would actually do.
+	assert.False(t, IsRemote("http://example.com/preset.yaml"))
 	assert.False(t, IsRemote("/local/path/preset.yaml"))
 	assert.False(t, IsRemote("relative/path.yaml"))
 	assert.False(t, IsRemote("://not-a-url"))
+	// Regression: a Windows-style path parses with scheme "C" under
+	// url.Parse, which previously made IsRemote misreport it as remote
+	// even though Fetch treats it as a local path (no https:// prefix).
+	assert.False(t, IsRemote(`C:\presets\org.yaml`))
 }
 
 func TestLoad_LocalWithHash(t *testing.T) {

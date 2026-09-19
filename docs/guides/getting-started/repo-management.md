@@ -165,6 +165,12 @@ preset is declared, an existing `.fullsend/config.base.yaml` is left
 alone and is not compared. `repos status` reports base-file drift only
 when a preset is declared. The same path applies to GitHub and GitLab.
 
+On a fresh install of a repo with a declared preset, `--roles` is left
+unset in the written overlay unless `--roles` was explicitly passed on
+the `repos install` command line — so the preset's own roles (rather
+than the fleet-wide `--roles` default) take effect through the layered
+config.
+
 ### Manifest paths and URLs
 
 The `-f`/`--manifest` flag accepts either a local file path or an HTTPS

@@ -236,13 +236,13 @@ func fetchHTTPSWithTLSConfig(ctx context.Context, rawURL string, skipIPCheck boo
 	return data, nil
 }
 
-// IsRemote reports whether source is a URL rather than a local path.
+// IsRemote reports whether source is a URL rather than a local path,
+// matching the schemes Fetch itself treats as remote (https:// only).
+// A bare scheme check via url.Parse would misclassify strings such as a
+// Windows-style path ("C:\presets\org.yaml", scheme "C") as remote even
+// though Fetch treats them as local paths.
 func IsRemote(source string) bool {
-	u, err := url.Parse(source)
-	if err != nil {
-		return false
-	}
-	return u.Scheme != ""
+	return strings.HasPrefix(strings.ToLower(source), "https://")
 }
 
 // ValidateYAML checks that data is syntactically valid YAML.
