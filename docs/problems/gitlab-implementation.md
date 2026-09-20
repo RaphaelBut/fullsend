@@ -538,9 +538,10 @@ Modified packages (minimized via forge.Client abstraction):
 > with `FULLSEND_GITLAB_*_TOKEN` identifiers, a trusted install-state
 > registry, and an explicit migration gate — is defined in
 > [gitlab-role-credentials.md](../contributing/gitlab-role-credentials.md).
-> Runtime installations still use the shared `FULLSEND_FORGE_TOKEN`
-> until provisioning and routing land. Role registration is not accepted
-> from repository or merge-request content.
+> `repos install` can provision built-in and custom role credentials
+> additively without revoking the shared token. Runtime jobs still
+> authenticate with `FULLSEND_FORGE_TOKEN` until routing lands. Role
+> registration is not accepted from repository or merge-request content.
 
 **How protected variables work**: GitLab restricts protected variables to pipelines running on protected branches only. Pipelines triggered on unprotected branches cannot access these variables, regardless of how the pipeline was triggered (webhook, trigger API, manual, etc.).
 

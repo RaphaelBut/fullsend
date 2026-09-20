@@ -146,8 +146,8 @@ GitLab doesn't have an exact GitHub Apps equivalent, but Project Access Tokens (
 > not). The orchestrator row remains historical for the abandoned
 > `.fullsend` config-repo / per-role PAT model and is not the poller's
 > runtime identity. The current registered-role contract (built-in
-> Poller/Analyst/Coder plus administrator custom roles, still
-> unprovisioned) is in
+> Poller/Analyst/Coder plus administrator custom roles, provisioned
+> additively by `repos install`) is in
 > [gitlab-role-credentials.md](../contributing/gitlab-role-credentials.md).
 
 **Storage**: Project Access Token values stored as CI/CD variables:

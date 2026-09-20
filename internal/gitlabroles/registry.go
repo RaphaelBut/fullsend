@@ -161,10 +161,25 @@ func CustomSecretName(role Role) string {
 	return "FULLSEND_GITLAB_ROLE_" + roleIdentifier(string(role)) + "_TOKEN"
 }
 
+// customRoleTokenPrefix is the GitLab project access token name prefix
+// for a custom role's own credential.
+const customRoleTokenPrefix = "fullsend-role-"
+
 // CustomTokenName is the GitLab project access token name for a
 // custom role's own credential.
 func CustomTokenName(role Role) string {
-	return "fullsend-role-" + string(role)
+	return customRoleTokenPrefix + string(role)
+}
+
+// IsRoleProjectTokenName reports whether name is a built-in or custom
+// role project access token (not the shared fullsend-bot token).
+func IsRoleProjectTokenName(name string) bool {
+	switch name {
+	case PollerTokenName, AnalystTokenName, CoderTokenName:
+		return true
+	default:
+		return strings.HasPrefix(name, customRoleTokenPrefix)
+	}
 }
 
 // BuiltinRegistry returns the three built-in roles and no custom
@@ -539,7 +554,7 @@ func builtinRegistrations() []Registration {
 			Credential: CredentialRef{
 				Kind:       CredentialOwn,
 				SecretName: forge.SecretGitLabPollerToken,
-				TokenName:  "fullsend-poller",
+				TokenName:  PollerTokenName,
 			},
 			Capabilities: []Capability{
 				CapReadIssues,
@@ -555,7 +570,7 @@ func builtinRegistrations() []Registration {
 			Credential: CredentialRef{
 				Kind:       CredentialOwn,
 				SecretName: forge.SecretGitLabAnalystToken,
-				TokenName:  "fullsend-analyst",
+				TokenName:  AnalystTokenName,
 			},
 			Capabilities: []Capability{
 				CapReadIssues,
@@ -573,7 +588,7 @@ func builtinRegistrations() []Registration {
 			Credential: CredentialRef{
 				Kind:       CredentialOwn,
 				SecretName: forge.SecretGitLabCoderToken,
-				TokenName:  "fullsend-coder",
+				TokenName:  CoderTokenName,
 			},
 			Capabilities: []Capability{
 				CapReadIssues,
@@ -601,4 +616,40 @@ func looksLikeSecretValue(s string) bool {
 	return strings.HasPrefix(lower, "glpat-") ||
 		strings.HasPrefix(lower, "glptt-") ||
 		strings.HasPrefix(lower, "gldt-")
+}
+
+// MarshalCustomRoles serializes administrator-registered custom roles
+// as FULLSEND_GITLAB_ROLE_REGISTRY JSON. Built-in roles are omitted;
+// an empty custom set is {"roles":[]}, which ParseRegistry treats as
+// built-ins only. The document contains credential references and
+// policy, never token values.
+func MarshalCustomRoles(reg Registry) (string, error) {
+	reg = reg.effective()
+	file := registryFile{Roles: make([]registryRole, 0)}
+	for _, rec := range reg.roles {
+		if rec.Kind != RoleKindCustom {
+			continue
+		}
+		row := registryRole{
+			Name:           string(rec.Name),
+			Responsibility: rec.Responsibility,
+			Credential:     string(rec.Credential.Kind),
+			Capabilities:   make([]string, len(rec.Capabilities)),
+			Agents:         append([]string(nil), rec.Agents...),
+		}
+		for i, cap := range rec.Capabilities {
+			row.Capabilities[i] = string(cap)
+		}
+		if rec.Credential.Kind == CredentialReuse {
+			row.Reuse = string(rec.Credential.ReuseOf)
+		} else if rec.Credential.SecretName != "" && rec.Credential.SecretName != CustomSecretName(rec.Name) {
+			row.SecretName = rec.Credential.SecretName
+		}
+		file.Roles = append(file.Roles, row)
+	}
+	raw, err := json.Marshal(file)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidRegistry, err)
+	}
+	return string(raw), nil
 }

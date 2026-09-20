@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +18,9 @@ import (
 
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	"github.com/fullsend-ai/fullsend/internal/forge/gitlab"
+	"github.com/fullsend-ai/fullsend/internal/gitlabroles"
 	"github.com/fullsend-ai/fullsend/internal/poll"
+	"github.com/fullsend-ai/fullsend/internal/repos"
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
@@ -633,4 +637,269 @@ func TestProvisionGitLabPollState_ReusesExistingSecret(t *testing.T) {
 	_, err = fake.GetFileContentAtRef(ctx, "group", "project", poll.PollStateFileName, poll.PollStateBranchSlash)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "[group/project] Seeded poll-state branches")
+}
+
+func TestParseGitLabRoleTokens(t *testing.T) {
+	got, err := parseGitLabRoleTokens([]string{"poller=glpat-LEAKME-token", "analyst=abc"})
+	require.NoError(t, err)
+	assert.Equal(t, "glpat-LEAKME-token", got[gitlabroles.RolePoller])
+	assert.Equal(t, "abc", got[gitlabroles.RoleAnalyst])
+
+	_, err = parseGitLabRoleTokens([]string{"notoken"})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "glpat-")
+
+	_, err = parseGitLabRoleTokens([]string{"glpat-LEAKME-token=poller"})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "glpat-LEAKME-token")
+}
+
+func TestPrepareGitLabRoleFlags(t *testing.T) {
+	t.Run("rejects enforced", func(t *testing.T) {
+		err := prepareGitLabRoleFlags(&reposInstallConfig{gitlabRoleMigration: "enforced"})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "#7501")
+	})
+
+	t.Run("parses migrating and registry file", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "registry.json")
+		raw := `{"roles":[{"name":"scanner","agents":["scanner"]}]}`
+		require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+		opts := &reposInstallConfig{
+			gitlabRoleMigration: "migrating",
+			gitlabRoleRegistry:  path,
+			gitlabRoleTokens:    []string{"scanner=glpat-LEAKME-scanner"},
+		}
+		require.NoError(t, prepareGitLabRoleFlags(opts))
+		assert.Equal(t, gitlabroles.ModeMigrating, opts.gitlabRoleModeFlag)
+		assert.Equal(t, raw, opts.gitlabRoleRegistryJSON)
+		assert.Equal(t, "glpat-LEAKME-scanner", opts.gitlabRoleProvided[gitlabroles.Role("scanner")])
+	})
+}
+
+func TestSetupGitLabRoleCredentials_FakeClientPartialAndNoLeak(t *testing.T) {
+	ctx := context.Background()
+	fake := &forge.FakeClient{}
+	fake.Secrets = map[string]bool{"group/project/" + forge.SecretForgeToken: true}
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	opts := &reposInstallConfig{}
+
+	err := setupGitLabRoleCredentials(ctx, opts, fake, printer, "group", "project", gitlabroles.ModeMigrating)
+	require.NoError(t, err)
+	out := buf.String()
+	assert.NotContains(t, out, "glpat-")
+	assert.Contains(t, out, "poller role credential pending")
+	assert.Contains(t, out, "gate=migrating")
+	assert.Contains(t, out, "shared credential preserved")
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
+}
+
+func TestShowGitLabRoleStatus(t *testing.T) {
+	assert.False(t, showGitLabRoleStatus(repos.RepoStatus{}))
+	assert.False(t, showGitLabRoleStatus(repos.RepoStatus{
+		GitLabRoleMode:        "disabled",
+		GitLabRoleDiagnostics: []string{"mode=disabled"},
+	}))
+	assert.True(t, showGitLabRoleStatus(repos.RepoStatus{
+		GitLabRoleMode:        "migrating",
+		GitLabRoleDiagnostics: []string{"mode=migrating"},
+	}))
+	assert.True(t, showGitLabRoleStatus(repos.RepoStatus{
+		GitLabRoleMode:        "disabled",
+		GitLabRolesPartial:    true,
+		GitLabRoleDiagnostics: []string{"partial"},
+	}))
+}
+
+func TestMaybeProvisionGitLabRoles_FreshAndExistingMigrating(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.Secrets["group/project/"+forge.SecretForgeToken] = true
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+
+	require.NoError(t, maybeProvisionGitLabRoles(ctx, &reposInstallConfig{}, fake, printer, "group", "project", true))
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+
+	fake2 := forge.NewFakeClient()
+	fake2.Secrets["group/project/"+forge.SecretForgeToken] = true
+	fake2.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "migrating"
+	fake2.VariablesExist["group/project/"+forge.VarGitLabRoleMigration] = true
+	buf.Reset()
+	require.NoError(t, maybeProvisionGitLabRoles(ctx, &reposInstallConfig{}, fake2, printer, "group", "project", false))
+	assert.Contains(t, buf.String(), "Provisioning GitLab role credentials")
+}
+
+func TestPrintGitLabRoleProvisionCoversBranches(t *testing.T) {
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	printGitLabRoleProvision(printer, "g/p", repos.RoleProvisionResult{
+		DryRun:      true,
+		Created:     []gitlabroles.Role{gitlabroles.RolePoller},
+		Enrolled:    []gitlabroles.Role{gitlabroles.RoleAnalyst},
+		Skipped:     []gitlabroles.Role{gitlabroles.RoleCoder},
+		Reused:      []gitlabroles.Role{gitlabroles.Role("deployer")},
+		Failed:      []repos.RoleProvisionFailure{{Role: gitlabroles.Role("scanner"), Secret: "FULLSEND_GITLAB_ROLE_SCANNER_TOKEN", Reason: "pending"}},
+		GateWritten: true,
+		Mode:        gitlabroles.ModeMigrating,
+		Diagnostics: []string{"mode=migrating"},
+	})
+	out := buf.String()
+	assert.Contains(t, out, "Would create poller")
+	assert.Contains(t, out, "Would enroll analyst")
+	assert.Contains(t, out, "coder role credential already present")
+	assert.Contains(t, out, "deployer reuses")
+	assert.Contains(t, out, "scanner role credential pending")
+	assert.Contains(t, out, "gate=migrating")
+	assert.NotContains(t, out, "glpat-")
+}
+
+func TestGitLabTokenAdapter(t *testing.T) {
+	ctx := context.Background()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": 7, "name": "fullsend-poller", "token": "glpat-adapter", "active": true,
+		})
+	})
+	mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens/7", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
+	require.NoError(t, err)
+	ad := gitlabTokenAdapter{c: glClient}
+	tok, err := ad.CreateProjectAccessToken(ctx, "group", "project", "fullsend-poller", []string{"api"}, 30, "2027-01-01")
+	require.NoError(t, err)
+	require.NotNil(t, tok)
+	assert.Equal(t, 7, tok.ID)
+	assert.Equal(t, "fullsend-poller", tok.Name)
+	assert.Equal(t, "glpat-adapter", tok.Token)
+	require.NoError(t, ad.RevokeProjectAccessToken(ctx, "group", "project", 7))
+
+	muxFail := http.NewServeMux()
+	muxFail.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+	srvFail := httptest.NewServer(muxFail)
+	defer srvFail.Close()
+	glFail, err := gitlab.New("test-token", gitlab.WithBaseURL(srvFail.URL))
+	require.NoError(t, err)
+	_, err = gitlabTokenAdapter{c: glFail}.CreateProjectAccessToken(ctx, "group", "project", "fullsend-poller", []string{"api"}, 30, "2027-01-01")
+	require.Error(t, err)
+}
+
+func TestPrepareGitLabRoleFlagsInvalidMode(t *testing.T) {
+	err := prepareGitLabRoleFlags(&reposInstallConfig{gitlabRoleMigration: "nope"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, gitlabroles.ErrInvalidMode)
+}
+
+func TestGitLabRoleWorkNeededExistingEnforced(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.VariableValues["g/p/"+forge.VarGitLabRoleMigration] = "enforced"
+	fake.VariablesExist["g/p/"+forge.VarGitLabRoleMigration] = true
+	needed, mode, err := gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{}, "g", "p", false)
+	require.NoError(t, err)
+	assert.True(t, needed)
+	assert.Equal(t, gitlabroles.ModeEnforced, mode)
+
+	needed, _, err = gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{gitlabRoleModeFlag: gitlabroles.ModeRollback}, "g", "p", false)
+	require.NoError(t, err)
+	assert.True(t, needed)
+
+	fake.Errors["GetRepoVariable"] = fmt.Errorf("denied")
+	_, _, err = gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{}, "g", "p", false)
+	require.Error(t, err)
+}
+
+func TestSetupGitLabRoleCredentials_RegistryReadError(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.Errors["GetRepoVariable"] = fmt.Errorf("denied")
+	var buf bytes.Buffer
+	err := setupGitLabRoleCredentials(ctx, &reposInstallConfig{}, fake, ui.New(&buf), "group", "project", gitlabroles.ModeMigrating)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "glpat-")
+}
+
+func TestMaybeProvisionGitLabRoles_SkipExistingDisabled(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.Secrets["group/project/"+forge.SecretForgeToken] = true
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	opts := &reposInstallConfig{}
+
+	err := maybeProvisionGitLabRoles(ctx, opts, fake, printer, "group", "project", false)
+	require.NoError(t, err)
+	assert.Empty(t, fake.UpdatedVariables)
+	assert.NotContains(t, buf.String(), "Provisioning GitLab role credentials")
+}
+
+func TestCleanupGitLabRoleTokens(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("nil client is a no-op", func(t *testing.T) {
+		var buf bytes.Buffer
+		printer := ui.New(&buf)
+		require.NoError(t, cleanupGitLabRoleTokens(ctx, nil, printer, "group", "project"))
+	})
+
+	t.Run("revokes role tokens not shared bot", func(t *testing.T) {
+		var revokedIDs []int
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]map[string]any{
+				{"id": 1, "name": "fullsend-bot", "active": true},
+				{"id": 2, "name": "fullsend-poller", "active": true},
+				{"id": 3, "name": "fullsend-role-scanner", "active": true},
+				{"id": 4, "name": "other-token", "active": true},
+			})
+		})
+		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens/2", func(w http.ResponseWriter, r *http.Request) {
+			revokedIDs = append(revokedIDs, 2)
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens/3", func(w http.ResponseWriter, r *http.Request) {
+			revokedIDs = append(revokedIDs, 3)
+			w.WriteHeader(http.StatusNoContent)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
+		require.NoError(t, err)
+		var buf bytes.Buffer
+		printer := ui.New(&buf)
+		require.NoError(t, cleanupGitLabRoleTokens(ctx, glClient, printer, "group", "project"))
+		assert.ElementsMatch(t, []int{2, 3}, revokedIDs)
+		assert.Contains(t, buf.String(), "Revoked 2 GitLab role access token")
+		assert.NotContains(t, buf.String(), "glpat-")
+	})
+
+	t.Run("list error is non-fatal", func(t *testing.T) {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
+		require.NoError(t, err)
+		var buf bytes.Buffer
+		require.NoError(t, cleanupGitLabRoleTokens(ctx, glClient, ui.New(&buf), "group", "project"))
+		assert.Contains(t, buf.String(), "Could not list project access tokens")
+	})
 }

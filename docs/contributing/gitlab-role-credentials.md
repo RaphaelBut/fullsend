@@ -12,9 +12,9 @@ three-role decision in [#7424](https://github.com/fullsend-ai/fullsend/issues/74
 and parent [#7496](https://github.com/fullsend-ai/fullsend/issues/7496).
 
 The Go package is [`internal/gitlabroles`](../../internal/gitlabroles/).
-Provisioning, routing, rotation, and shared-token retirement are
-follow-up issues; this document is the contract those issues implement
-against.
+Provisioning of built-in and custom role credentials is implemented by
+`repos install` (`internal/repos` / `internal/cli`). Routing, rotation,
+and shared-token retirement remain follow-up issues.
 
 Built-in and custom roles are the same kind of registry entry. Job
 credential selection walks that registry; it does not switch on a
@@ -142,10 +142,10 @@ mode and policy without exposing secrets.
 | Name | Kind | Purpose |
 | --- | --- | --- |
 | `FULLSEND_FORGE_TOKEN` | masked secret | Shared bot PAT. Unchanged default path. |
-| `FULLSEND_GITLAB_POLLER_TOKEN` | masked secret | Poller PAT. Optional until provisioning. |
-| `FULLSEND_GITLAB_ANALYST_TOKEN` | masked secret | Analyst PAT. Optional until provisioning. |
-| `FULLSEND_GITLAB_CODER_TOKEN` | masked secret | Coder PAT. Optional until provisioning. |
-| `FULLSEND_GITLAB_ROLE_<NAME>_TOKEN` | masked secret | Custom role PAT when `credential` is `own`. Optional until provisioning. |
+| `FULLSEND_GITLAB_POLLER_TOKEN` | masked secret | Poller PAT. Provisioned by `repos install`; optional on existing installs until migration. |
+| `FULLSEND_GITLAB_ANALYST_TOKEN` | masked secret | Analyst PAT. Provisioned by `repos install`; optional on existing installs until migration. |
+| `FULLSEND_GITLAB_CODER_TOKEN` | masked secret | Coder PAT. Provisioned by `repos install`; optional on existing installs until migration. |
+| `FULLSEND_GITLAB_ROLE_<NAME>_TOKEN` | masked secret | Custom role PAT when `credential` is `own`. Provisioned when the role is registered. |
 | `FULLSEND_GITLAB_ROLE_MIGRATION` | unmasked variable | Feature gate. Absent or empty = `disabled`. |
 | `FULLSEND_GITLAB_ROLE_REGISTRY` | unmasked variable | Administrator registry JSON. Absent or empty = built-ins only. |
 
@@ -171,9 +171,12 @@ not have.
 | Custom `own` | `fullsend-role-<name>` | Developer (30) | `api` |
 | Custom `reuse` | (none; uses the target role's PAT) | — | — |
 
-Provisioning (#7498) creates these tokens. This contract only names
-them. Access level and scopes match the current shared bot; do not
-claim finer GitLab permissions than the implementation uses.
+`repos install` creates these tokens on a fresh GitLab install and on
+an existing install that opts into `--gitlab-role-migration=migrating`
+(or already has a `migrating`/`enforced` gate). It does not revoke the
+shared `fullsend-bot` token. Access level and scopes match the current
+shared bot; do not claim finer GitLab permissions than the
+implementation uses.
 
 ## Job → role mapping
 
@@ -302,9 +305,11 @@ rotation (#7500) removes them.
 `Error` strings. Presence booleans and variable names are the only
 safe signals.
 
-`repos status` / converge health checks stay on the shared-token
-required set until provisioning (#7498) starts writing role secrets
-under an enabled gate.
+`repos status` reports per-role diagnostics (names only). Missing role
+secrets are not health drift while the gate is `disabled` or
+`migrating`; they are drift when the gate is `enforced`. Converge
+health checks stay on the shared-token required set so a partial
+migration cannot fail an otherwise healthy install.
 
 ## Registry JSON shape
 
@@ -335,16 +340,16 @@ under an enabled gate.
 rule as mint role names. `secret_name` is optional on `own` and must
 equal the derived `FULLSEND_GITLAB_ROLE_<NAME>_TOKEN` when set.
 
-Provisioning (#7498) is what writes this variable. Agents and
-repository files do not.
+`repos install --gitlab-role-registry` writes this variable.
+Agents and repository files do not.
 
 ## What this contract does not do
 
-Leave these to the follow-up issues. Do not implement them under #7497.
+Leave these to the follow-up issues.
 
 | Issue | Work |
 | --- | --- |
-| [#7498](https://github.com/fullsend-ai/fullsend/issues/7498) | Create/enroll built-in and custom PATs, store them as protected masked CI variables, write the registry, set the gate, report partial provisioning, preserve the shared token, reinstall/drift/uninstall |
+| [#7498](https://github.com/fullsend-ai/fullsend/issues/7498) | **Implemented.** `repos install` creates/enrolls built-in and custom PATs, stores them as protected masked CI variables, writes the registry, sets the gate, reports partial provisioning, preserves the shared token, and handles reinstall/drift/uninstall without deleting credentials still in use |
 | [#7499](https://github.com/fullsend-ai/fullsend/issues/7499) | Wire `Resolve` and `ValidateAgent` into poll, agent, and forge operations so each job uses only its registered role |
 | [#7500](https://github.com/fullsend-ai/fullsend/issues/7500) | Rotation, recovery, in-flight jobs, expiry/revocation diagnostics |
 | [#7501](https://github.com/fullsend-ai/fullsend/issues/7501) | Verification, enable `enforced`, retire the shared token |

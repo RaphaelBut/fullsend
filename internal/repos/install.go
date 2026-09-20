@@ -715,8 +715,10 @@ func requiredVarsForForge(forgeName string) []string {
 // orphan detection to flag them as false positives.
 //
 // GitLab role tokens (FULLSEND_GITLAB_*_TOKEN) and the role registry
-// stay optional while FULLSEND_GITLAB_ROLE_MIGRATION is disabled so
-// existing installations do not fail health checks. See internal/gitlabroles.
+// stay optional in this required set so existing installations and
+// partial migrations do not fail health checks. Missing role secrets
+// under an enabled gate are reported by Diagnose / repos status, not
+// by requiredSecretsForForge. See internal/gitlabroles.
 func requiredSecretsForForge(forgeName string) []string {
 	if forgeName == ForgeGitLab {
 		return slices.Concat(requiredSecrets, []string{forge.SecretForgeToken})

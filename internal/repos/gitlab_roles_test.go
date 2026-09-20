@@ -1,0 +1,643 @@
+package repos
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/fullsend-ai/fullsend/internal/forge"
+	"github.com/fullsend-ai/fullsend/internal/gitlabroles"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+const leakToken = "glpat-LEAKME-super-secret"
+
+type fakeTokens struct {
+	mu         sync.Mutex
+	nextID     int
+	created    []ProjectAccessToken
+	revoked    []int
+	failCreate map[string]error
+	failRevoke error
+	emptyValue map[string]bool
+}
+
+func (f *fakeTokens) CreateProjectAccessToken(_ context.Context, _, _, name string, _ []string, _ int, _ string) (*ProjectAccessToken, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.failCreate[name]; err != nil {
+		return nil, err
+	}
+	f.nextID++
+	tok := ProjectAccessToken{ID: f.nextID, Name: name, Token: leakToken + "-" + name}
+	if f.emptyValue[name] {
+		tok.Token = ""
+	}
+	f.created = append(f.created, tok)
+	return &tok, nil
+}
+
+func (f *fakeTokens) RevokeProjectAccessToken(_ context.Context, _, _ string, tokenID int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failRevoke != nil {
+		return f.failRevoke
+	}
+	f.revoked = append(f.revoked, tokenID)
+	return nil
+}
+
+func (f *fakeTokens) createdNames() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.created))
+	for i, t := range f.created {
+		out[i] = t.Name
+	}
+	return out
+}
+
+func provisionClient(t *testing.T) *forge.FakeClient {
+	t.Helper()
+	fc := forge.NewFakeClient()
+	fc.Secrets["group/project/"+forge.SecretForgeToken] = true
+	return fc
+}
+
+func assertNoLeak(t *testing.T, hay string) {
+	t.Helper()
+	assert.NotContains(t, hay, "glpat-")
+	assert.NotContains(t, hay, leakToken)
+}
+
+func TestGitLabPATExpiresAtUsesUTC(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 6, 15, 22, 0, 0, 0, time.FixedZone("west", -8*3600))
+	assert.Equal(t, "2027-06-16", GitLabPATExpiresAt(now))
+}
+
+func TestProvisionGitLabRoleCredentials_FreshBuiltins(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	tokens := &fakeTokens{}
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Tokens:   tokens,
+		Registry: gitlabroles.BuiltinRegistry(),
+		Now:      time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	assert.True(t, result.SharedPreserved)
+	assert.Equal(t, gitlabroles.ModeMigrating, result.Mode)
+	assert.ElementsMatch(t, []gitlabroles.Role{
+		gitlabroles.RolePoller, gitlabroles.RoleAnalyst, gitlabroles.RoleCoder,
+	}, result.Created)
+	assert.Empty(t, result.Failed)
+	assert.Empty(t, result.Skipped)
+	assert.True(t, result.GateWritten)
+	assert.True(t, result.RegistryWritten)
+	assert.True(t, result.Report.Ready)
+	assert.False(t, result.Report.Partial)
+
+	assert.ElementsMatch(t, []string{
+		gitlabroles.PollerTokenName, gitlabroles.AnalystTokenName, gitlabroles.CoderTokenName,
+	}, tokens.createdNames())
+	assert.Empty(t, tokens.revoked)
+	assert.True(t, fc.Secrets["group/project/"+forge.SecretForgeToken])
+	assert.True(t, fc.Secrets["group/project/"+forge.SecretGitLabPollerToken])
+	assert.True(t, fc.Secrets["group/project/"+forge.SecretGitLabAnalystToken])
+	assert.True(t, fc.Secrets["group/project/"+forge.SecretGitLabCoderToken])
+	assert.Equal(t, "migrating", fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.Equal(t, `{"roles":[]}`, fc.VariableValues["group/project/"+forge.VarGitLabRoleRegistry])
+
+	for _, rec := range fc.CreatedSecrets {
+		assertNoLeak(t, rec.Name)
+	}
+	for _, rec := range fc.UpdatedVariables {
+		assertNoLeak(t, rec.Name)
+		assertNoLeak(t, rec.Value)
+		assert.True(t, rec.Protected)
+	}
+	for _, d := range result.Diagnostics {
+		assertNoLeak(t, d)
+	}
+}
+
+func TestProvisionGitLabRoleCredentials_CustomOwnAndReuse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	tokens := &fakeTokens{}
+	reg, err := gitlabroles.ParseRegistry(`{
+		"roles": [
+			{"name":"scanner","credential":"own","capabilities":["read_issues"],"agents":["scanner"]},
+			{"name":"deployer","credential":"reuse","reuse":"coder","capabilities":["write_repository"],"agents":["deploy"]}
+		]
+	}`)
+	require.NoError(t, err)
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Tokens:   tokens,
+		Registry: reg,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result.Created, gitlabroles.Role("scanner"))
+	assert.Contains(t, result.Reused, gitlabroles.Role("deployer"))
+	assert.Contains(t, tokens.createdNames(), gitlabroles.CustomTokenName(gitlabroles.Role("scanner")))
+	assert.NotContains(t, tokens.createdNames(), "fullsend-role-deployer")
+	assert.True(t, fc.Secrets["group/project/"+gitlabroles.CustomSecretName(gitlabroles.Role("scanner"))])
+	raw := fc.VariableValues["group/project/"+forge.VarGitLabRoleRegistry]
+	assert.Contains(t, raw, `"name":"scanner"`)
+	assert.Contains(t, raw, `"name":"deployer"`)
+	assert.Contains(t, raw, `"reuse":"coder"`)
+	assertNoLeak(t, raw)
+}
+
+func TestProvisionGitLabRoleCredentials_PartialFailureLeavesShared(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	tokens := &fakeTokens{failCreate: map[string]error{
+		gitlabroles.AnalystTokenName: fmt.Errorf("403 forbidden"),
+	}}
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Tokens:   tokens,
+		Registry: gitlabroles.BuiltinRegistry(),
+	})
+	require.NoError(t, err)
+	assert.True(t, result.SharedPreserved)
+	assert.True(t, result.Report.Partial)
+	assert.False(t, result.Report.Ready)
+	assert.ElementsMatch(t, []gitlabroles.Role{gitlabroles.RolePoller, gitlabroles.RoleCoder}, result.Created)
+	require.Len(t, result.Failed, 1)
+	assert.Equal(t, gitlabroles.RoleAnalyst, result.Failed[0].Role)
+	assert.Equal(t, forge.SecretGitLabAnalystToken, result.Failed[0].Secret)
+	assert.Equal(t, "project access token creation failed", result.Failed[0].Reason)
+	assertNoLeak(t, result.Failed[0].Reason)
+	assert.True(t, fc.Secrets["group/project/"+forge.SecretForgeToken])
+	assert.False(t, fc.Secrets["group/project/"+forge.SecretGitLabAnalystToken])
+	assert.Equal(t, "migrating", fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.NotContains(t, tokens.createdNames(), gitlabroles.AnalystTokenName)
+}
+
+func TestProvisionGitLabRoleCredentials_RetrySkipsPresent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	fc.Secrets["group/project/"+forge.SecretGitLabPollerToken] = true
+	fc.Secrets["group/project/"+forge.SecretGitLabCoderToken] = true
+	tokens := &fakeTokens{}
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Tokens:   tokens,
+		Registry: gitlabroles.BuiltinRegistry(),
+	})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []gitlabroles.Role{gitlabroles.RolePoller, gitlabroles.RoleCoder}, result.Skipped)
+	assert.Equal(t, []gitlabroles.Role{gitlabroles.RoleAnalyst}, result.Created)
+	assert.Equal(t, []string{gitlabroles.AnalystTokenName}, tokens.createdNames())
+	assert.Empty(t, tokens.revoked)
+}
+
+func TestProvisionGitLabRoleCredentials_RollbackDoesNotCreateOrDelete(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	fc.Secrets["group/project/"+forge.SecretGitLabPollerToken] = true
+	tokens := &fakeTokens{}
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:       "group",
+		Repo:        "project",
+		Client:      fc,
+		Tokens:      tokens,
+		Registry:    gitlabroles.BuiltinRegistry(),
+		DesiredMode: gitlabroles.ModeRollback,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.Created)
+	assert.Empty(t, tokens.createdNames())
+	assert.Empty(t, tokens.revoked)
+	assert.True(t, fc.Secrets["group/project/"+forge.SecretGitLabPollerToken])
+	assert.True(t, fc.Secrets["group/project/"+forge.SecretForgeToken])
+	assert.Equal(t, "rollback", fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.False(t, result.RegistryWritten)
+	_, hasRegistry := fc.VariableValues["group/project/"+forge.VarGitLabRoleRegistry]
+	assert.False(t, hasRegistry)
+}
+
+func TestProvisionGitLabRoleCredentials_ReinstallDoesNotRevoke(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	for _, name := range []string{
+		forge.SecretGitLabPollerToken, forge.SecretGitLabAnalystToken, forge.SecretGitLabCoderToken,
+	} {
+		fc.Secrets["group/project/"+name] = true
+	}
+	tokens := &fakeTokens{}
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Tokens:   tokens,
+		Registry: gitlabroles.BuiltinRegistry(),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.Created)
+	assert.Empty(t, result.Failed)
+	assert.Len(t, result.Skipped, 3)
+	assert.Empty(t, tokens.createdNames())
+	assert.Empty(t, tokens.revoked)
+	assert.True(t, result.Report.Ready)
+}
+
+func TestProvisionGitLabRoleCredentials_ProvidedTokenEnrolled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	tokens := &fakeTokens{}
+	provided := leakToken + "-provided"
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Tokens:   tokens,
+		Registry: gitlabroles.BuiltinRegistry(),
+		ProvidedTokens: map[gitlabroles.Role]string{
+			gitlabroles.RolePoller: provided,
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []gitlabroles.Role{gitlabroles.RolePoller}, result.Enrolled)
+	assert.NotContains(t, result.Created, gitlabroles.RolePoller)
+	assert.NotContains(t, tokens.createdNames(), gitlabroles.PollerTokenName)
+	assert.True(t, fc.Secrets["group/project/"+forge.SecretGitLabPollerToken])
+	var stored string
+	for _, rec := range fc.CreatedSecrets {
+		if rec.Name == forge.SecretGitLabPollerToken {
+			stored = rec.Value
+		}
+	}
+	assert.Equal(t, provided, stored)
+	for _, d := range result.Diagnostics {
+		assertNoLeak(t, d)
+	}
+}
+
+func TestProvisionGitLabRoleCredentials_StoreFailureRevokesNewPATOnly(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	fc.Errors["CreateRepoSecret"] = fmt.Errorf("forbidden")
+	tokens := &fakeTokens{}
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Tokens:   tokens,
+		Registry: gitlabroles.BuiltinRegistry(),
+	})
+	require.NoError(t, err)
+	assert.Len(t, result.Failed, 3)
+	assert.Empty(t, result.Created)
+	require.Len(t, tokens.created, 3)
+	assert.Equal(t, []int{1, 2, 3}, tokens.revoked)
+	assert.True(t, fc.Secrets["group/project/"+forge.SecretForgeToken])
+	for _, f := range result.Failed {
+		assert.Equal(t, "storing role credential failed", f.Reason)
+		assertNoLeak(t, f.Reason)
+	}
+}
+
+func TestProvisionGitLabRoleCredentials_DryRunDoesNotWrite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	tokens := &fakeTokens{}
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Tokens:   tokens,
+		Registry: gitlabroles.BuiltinRegistry(),
+		DryRun:   true,
+	})
+	require.NoError(t, err)
+	assert.True(t, result.DryRun)
+	assert.Len(t, result.Created, 3)
+	assert.Empty(t, tokens.createdNames())
+	assert.Empty(t, fc.CreatedSecrets)
+	assert.Empty(t, fc.UpdatedVariables)
+	assert.False(t, fc.Secrets["group/project/"+forge.SecretGitLabPollerToken])
+}
+
+func TestProvisionGitLabRoleCredentials_NilTokenClientPartial(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Registry: gitlabroles.BuiltinRegistry(),
+	})
+	require.NoError(t, err)
+	assert.Len(t, result.Failed, 3)
+	assert.True(t, result.GateWritten)
+	assert.Equal(t, "migrating", fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.True(t, fc.Secrets["group/project/"+forge.SecretForgeToken])
+}
+
+func TestProvisionGitLabRoleCredentials_InvalidMode(t *testing.T) {
+	t.Parallel()
+	_, err := ProvisionGitLabRoleCredentials(context.Background(), RoleProvisionConfig{
+		Owner:       "group",
+		Repo:        "project",
+		Client:      provisionClient(t),
+		DesiredMode: gitlabroles.Mode("nope"),
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, gitlabroles.ErrInvalidMode)
+}
+
+func TestProvisionGitLabRoleCredentials_NilClient(t *testing.T) {
+	t.Parallel()
+	_, err := ProvisionGitLabRoleCredentials(context.Background(), RoleProvisionConfig{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "forge client")
+}
+
+func TestLoadGitLabRoleState(t *testing.T) {
+	t.Parallel()
+	fc := provisionClient(t)
+	fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "migrating"
+	fc.VariableValues["group/project/"+forge.VarGitLabRoleRegistry] = `{"roles":[{"name":"scanner","agents":["scanner"]}]}`
+	fc.Secrets["group/project/"+forge.SecretGitLabPollerToken] = true
+	fc.Secrets["group/project/"+gitlabroles.CustomSecretName(gitlabroles.Role("scanner"))] = true
+
+	mode, reg, present, err := LoadGitLabRoleState(context.Background(), fc, "group", "project")
+	require.NoError(t, err)
+	assert.Equal(t, gitlabroles.ModeMigrating, mode)
+	_, ok := reg.Lookup(gitlabroles.Role("scanner"))
+	assert.True(t, ok)
+	assert.True(t, present[forge.SecretForgeToken])
+	assert.True(t, present[forge.SecretGitLabPollerToken])
+	assert.False(t, present[forge.SecretGitLabAnalystToken])
+	assert.True(t, present[gitlabroles.CustomSecretName(gitlabroles.Role("scanner"))])
+}
+
+func TestIsGitLabRoleManagedVar(t *testing.T) {
+	t.Parallel()
+	assert.True(t, IsGitLabRoleManagedVar(forge.VarGitLabRoleMigration))
+	assert.True(t, IsGitLabRoleManagedVar(forge.VarGitLabRoleRegistry))
+	assert.True(t, IsGitLabRoleManagedVar(forge.SecretGitLabPollerToken))
+	assert.True(t, IsGitLabRoleManagedVar(forge.SecretGitLabAnalystToken))
+	assert.True(t, IsGitLabRoleManagedVar(forge.SecretGitLabCoderToken))
+	assert.True(t, IsGitLabRoleManagedVar("FULLSEND_GITLAB_ROLE_SCANNER_TOKEN"))
+	assert.False(t, IsGitLabRoleManagedVar(forge.SecretForgeToken))
+	assert.False(t, IsGitLabRoleManagedVar(forge.VarGitLabBotToken))
+	assert.False(t, IsGitLabRoleManagedVar("FULLSEND_BOGUS"))
+}
+
+func TestCheckOrphanVars_GitLabRoleArtifactsNotFlagged(t *testing.T) {
+	t.Parallel()
+	fc := forge.NewFakeClient()
+	fc.VariableValues["owner/repo/"+forge.SecretForgeToken] = "x"
+	fc.VariableValues["owner/repo/"+forge.SecretDispatch] = "x"
+	fc.VariableValues["owner/repo/"+forge.VarGitLabRoleMigration] = "migrating"
+	fc.VariableValues["owner/repo/"+forge.VarGitLabRoleRegistry] = `{"roles":[]}`
+	fc.VariableValues["owner/repo/"+forge.SecretGitLabPollerToken] = "x"
+	fc.VariableValues["owner/repo/"+forge.SecretGitLabAnalystToken] = "x"
+	fc.VariableValues["owner/repo/"+forge.SecretGitLabCoderToken] = "x"
+	fc.VariableValues["owner/repo/FULLSEND_GITLAB_ROLE_SCANNER_TOKEN"] = "x"
+
+	orphans, err := CheckOrphanVars(context.Background(), fc, "owner", "repo",
+		InstallConfig{Forge: ForgeGitLab}, "")
+	require.NoError(t, err)
+	assert.Empty(t, orphans)
+}
+
+func TestUninstall_GitLabCustomRoleTokenDeleted(t *testing.T) {
+	client := newInstalledFakeGitLabClient("acme/api")
+	client.VariableValues["acme/api/FULLSEND_GITLAB_ROLE_SCANNER_TOKEN"] = "x"
+	client.VariablesExist["acme/api/FULLSEND_GITLAB_ROLE_SCANNER_TOKEN"] = true
+
+	results, err := Uninstall(context.Background(), UninstallConfig{
+		Manifest:       testGitLabManifest("acme/api"),
+		Repos:          []string{"acme/api"},
+		Direct:         true,
+		MaxConcurrency: 4,
+	}, newTestClientFactory(client), uninstallCommitFn(client), nil)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.True(t, results[0].Success, results[0].Error)
+	assert.Equal(t, len(gitlabUninstallVars)+1, results[0].VarsDeleted)
+	_, still := client.VariableValues["acme/api/FULLSEND_GITLAB_ROLE_SCANNER_TOKEN"]
+	assert.False(t, still)
+}
+
+func TestAppendGitLabRoleStatus_EnforcedMissingIsDrift(t *testing.T) {
+	t.Parallel()
+	fc := provisionClient(t)
+	fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "enforced"
+	status := &RepoStatus{}
+	appendGitLabRoleStatus(context.Background(), fc, "group", "project", status)
+	assert.Equal(t, "enforced", status.GitLabRoleMode)
+	assert.True(t, status.GitLabRolesPartial || len(status.Drifts) > 0)
+	var fields []string
+	for _, d := range status.Drifts {
+		fields = append(fields, d.Field)
+		assertNoLeak(t, d.Field)
+		assertNoLeak(t, d.Actual)
+	}
+	assert.Contains(t, strings.Join(fields, ","), "gitlab-role:poller")
+	for _, d := range status.GitLabRoleDiagnostics {
+		assertNoLeak(t, d)
+	}
+}
+
+func TestAppendGitLabRoleStatus_MigratingMissingIsNotDrift(t *testing.T) {
+	t.Parallel()
+	fc := provisionClient(t)
+	fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "migrating"
+	status := &RepoStatus{}
+	appendGitLabRoleStatus(context.Background(), fc, "group", "project", status)
+	assert.Equal(t, "migrating", status.GitLabRoleMode)
+	assert.False(t, status.GitLabRolesReady)
+	assert.Empty(t, status.Drifts)
+	require.NotEmpty(t, status.GitLabRoleDiagnostics)
+	joined := strings.Join(status.GitLabRoleDiagnostics, "\n")
+	assert.Contains(t, joined, "pending")
+	for _, d := range status.GitLabRoleDiagnostics {
+		assertNoLeak(t, d)
+		assert.NotContains(t, d, leakToken)
+	}
+}
+
+func TestSecretLeakRejectsGlpatInDiagnostics(t *testing.T) {
+	t.Parallel()
+	got := secretLeak(RoleProvisionResult{Diagnostics: []string{"token " + leakToken}})
+	assert.Equal(t, "glpat-", got)
+	assert.Empty(t, secretLeak(RoleProvisionResult{Diagnostics: []string{"poller: pending (FULLSEND_GITLAB_POLLER_TOKEN)"}}))
+	assert.Equal(t, "glpat-", secretLeak(RoleProvisionResult{Failed: []RoleProvisionFailure{{Reason: leakToken}}}))
+	assert.Equal(t, "glpat-", secretLeak(RoleProvisionResult{Failed: []RoleProvisionFailure{{Role: gitlabroles.Role(leakToken)}}}))
+	assert.Equal(t, "glpat-", secretLeak(RoleProvisionResult{Failed: []RoleProvisionFailure{{Secret: leakToken}}}))
+	assert.Equal(t, "glpat-", secretLeak(RoleProvisionResult{Report: gitlabroles.Report{Diagnostics: []string{leakToken}}}))
+	assert.Equal(t, "glpat-", secretLeak(RoleProvisionResult{Mode: gitlabroles.Mode(leakToken)}))
+}
+
+func TestLoadGitLabRoleStateErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("invalid mode", func(t *testing.T) {
+		fc := provisionClient(t)
+		fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "nope"
+		_, _, _, err := LoadGitLabRoleState(ctx, fc, "group", "project")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, gitlabroles.ErrInvalidMode)
+	})
+
+	t.Run("invalid registry", func(t *testing.T) {
+		fc := provisionClient(t)
+		fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "migrating"
+		fc.VariableValues["group/project/"+forge.VarGitLabRoleRegistry] = `{`
+		_, _, _, err := LoadGitLabRoleState(ctx, fc, "group", "project")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, gitlabroles.ErrInvalidRegistry)
+	})
+
+	t.Run("gate read error", func(t *testing.T) {
+		fc := provisionClient(t)
+		fc.Errors["GetRepoVariable"] = fmt.Errorf("denied")
+		_, _, _, err := LoadGitLabRoleState(ctx, fc, "group", "project")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), forge.VarGitLabRoleMigration)
+	})
+}
+
+func TestAppendGitLabRoleStatus_InvalidInputs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("invalid registry", func(t *testing.T) {
+		fc := provisionClient(t)
+		fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "migrating"
+		fc.VariableValues["group/project/"+forge.VarGitLabRoleRegistry] = `{`
+		status := &RepoStatus{}
+		appendGitLabRoleStatus(ctx, fc, "group", "project", status)
+		assert.Equal(t, []string{"invalid GitLab role registry"}, status.GitLabRoleDiagnostics)
+	})
+
+	t.Run("invalid mode", func(t *testing.T) {
+		fc := provisionClient(t)
+		fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "bogus"
+		status := &RepoStatus{}
+		appendGitLabRoleStatus(ctx, fc, "group", "project", status)
+		assert.Equal(t, []string{"invalid GitLab role migration mode"}, status.GitLabRoleDiagnostics)
+	})
+
+	t.Run("read error", func(t *testing.T) {
+		fc := provisionClient(t)
+		fc.Errors["GetRepoVariable"] = fmt.Errorf("denied")
+		status := &RepoStatus{}
+		appendGitLabRoleStatus(ctx, fc, "group", "project", status)
+		assert.Equal(t, []string{"could not read GitLab role credential state"}, status.GitLabRoleDiagnostics)
+	})
+}
+
+func TestProvisionGitLabRoleCredentials_EmptyTokenAndGateWriteError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("empty token value", func(t *testing.T) {
+		fc := provisionClient(t)
+		tokens := &fakeTokens{emptyValue: map[string]bool{gitlabroles.PollerTokenName: true}}
+		result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+			Owner: "group", Repo: "project", Client: fc, Tokens: tokens,
+			Registry: gitlabroles.BuiltinRegistry(),
+		})
+		require.NoError(t, err)
+		var found bool
+		for _, f := range result.Failed {
+			if f.Role == gitlabroles.RolePoller && f.Reason == "project access token creation returned no value" {
+				found = true
+			}
+		}
+		assert.True(t, found)
+	})
+
+	t.Run("gate write error", func(t *testing.T) {
+		fc := provisionClient(t)
+		fc.Secrets["group/project/"+forge.SecretGitLabPollerToken] = true
+		fc.Secrets["group/project/"+forge.SecretGitLabAnalystToken] = true
+		fc.Secrets["group/project/"+forge.SecretGitLabCoderToken] = true
+		fc.Errors["UpdateCIVariable"] = fmt.Errorf("denied")
+		_, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+			Owner: "group", Repo: "project", Client: fc, Tokens: &fakeTokens{},
+			Registry: gitlabroles.BuiltinRegistry(),
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), forge.VarGitLabRoleMigration)
+	})
+
+	t.Run("presence error", func(t *testing.T) {
+		fc := provisionClient(t)
+		fc.Errors["RepoSecretExists"] = fmt.Errorf("denied")
+		_, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+			Owner: "group", Repo: "project", Client: fc, Tokens: &fakeTokens{},
+			Registry: gitlabroles.BuiltinRegistry(),
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "presence")
+	})
+
+	t.Run("provided token store failure", func(t *testing.T) {
+		fc := provisionClient(t)
+		fc.Errors["CreateRepoSecret"] = fmt.Errorf("denied")
+		result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+			Owner: "group", Repo: "project", Client: fc, Tokens: &fakeTokens{},
+			Registry:       gitlabroles.BuiltinRegistry(),
+			ProvidedTokens: map[gitlabroles.Role]string{gitlabroles.RolePoller: "provided"},
+		})
+		require.NoError(t, err)
+		var found bool
+		for _, f := range result.Failed {
+			if f.Role == gitlabroles.RolePoller && f.Reason == "storing administrator-provided credential failed" {
+				found = true
+			}
+		}
+		assert.True(t, found)
+	})
+}
+
+func TestExtraGitLabRoleUninstallVarsListError(t *testing.T) {
+	t.Parallel()
+	fc := forge.NewFakeClient()
+	fc.Errors["ListRepoVariables"] = fmt.Errorf("denied")
+	assert.Nil(t, extraGitLabRoleUninstallVars(context.Background(), fc, "o", "r", nil))
+}

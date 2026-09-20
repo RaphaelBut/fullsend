@@ -51,8 +51,12 @@ GitLab does not use GitHub Apps. Today's runtime is a single project
 access token (`fullsend-bot` / `FULLSEND_FORGE_TOKEN`). The registered-
 role contract — built-in Poller, Analyst, and Coder plus optional
 administrator-registered custom roles — is defined in
-[gitlab-role-credentials.md](gitlab-role-credentials.md). It is not yet
-provisioned or routed. Until that rollout, do not assume GitLab jobs
-have per-role identities analogous to the GitHub App table above.
-Role registration is install-state only; repository and merge-request
-content cannot create or elevate a GitLab role.
+[gitlab-role-credentials.md](gitlab-role-credentials.md).
+`repos install` provisions those credentials additively (fresh installs
+and opted-in migrations) without revoking `FULLSEND_FORGE_TOKEN`.
+Job routing still uses the shared token until
+[#7499](https://github.com/fullsend-ai/fullsend/issues/7499). Do not
+assume GitLab jobs have per-role identities analogous to the GitHub App
+table above until routing lands. Role registration is install-state
+only; repository and merge-request content cannot create or elevate a
+GitLab role.

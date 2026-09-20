@@ -296,13 +296,14 @@ Credentials:
   Pipeline job → protected CI/CD variable FULLSEND_FORGE_TOKEN → bot PAT
 ```
 
-> **See also (#7497):** The registered-role credential contract (built-in
-> Poller/Analyst/Coder plus administrator-registered custom roles) is
-> specified in
+> **See also (#7497, #7498):** The registered-role credential contract
+> (built-in Poller/Analyst/Coder plus administrator-registered custom
+> roles) is specified in
 > [gitlab-role-credentials.md](../contributing/gitlab-role-credentials.md).
-> The shared `FULLSEND_FORGE_TOKEN` path remains the runtime until
-> provisioning and routing land. This ADR's single-bot identity is the
-> current implementation, not the target model.
+> `repos install` can provision those credentials additively without
+> revoking `FULLSEND_FORGE_TOKEN`. Jobs still authenticate with the
+> shared token until routing lands (#7499). This ADR's single-bot
+> identity is the current runtime, not the target model.
 
 ### Credential model
 
