@@ -42,6 +42,8 @@ fullsend repos install -f repos.yaml "$OWNER/$REPO" \
 | `FULLSEND_GCP_PROJECT_ID` | CI/CD secret | GCP project ID for inference | `my-gcp-project` |
 | `FULLSEND_GCP_WIF_PROVIDER` | CI/CD secret | WIF provider resource name for inference | `projects/123456789/locations/global/...` |
 | `FULLSEND_DISPATCH_SECRET` | CI/CD secret | HMAC secret for dispatch variables and poll-state documents; auto-provisioned by `repos install` | (generated) |
+| `FULLSEND_GITLAB_ROLE_MIGRATION` | CI/CD variable | Reserved migration gate for the registered-role credential contract; unset means the shared `FULLSEND_FORGE_TOKEN` path. See [gitlab-role-credentials.md](../../contributing/gitlab-role-credentials.md) | (unset) |
+| `FULLSEND_GITLAB_ROLE_REGISTRY` | CI/CD variable | Reserved administrator role registry (JSON references and policy, not secret values); unset means built-in roles only | (unset) |
 | `OPENAI_API_KEY` | CI/CD variable (masked) | Opt-in static OpenAI API key when OpenAI WIF is unavailable; unused when the WIF trio is set | `sk-...` |
 
 ## Syncing workflow templates
