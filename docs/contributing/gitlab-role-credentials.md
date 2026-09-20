@@ -240,8 +240,16 @@ jobs). Those helpers load the gate, registry, and presence map, call
 - `Registry` from `LoadRegistry` (zero value = built-ins only)
 - `Present`: a boolean map of whether each secret *name* is non-empty
   (`PresenceFrom`). **Never put token values in this map.**
-- `FailedSecret`: the secret *name* that already failed authentication
-  in this job, or empty
+
+`Select` and `SelectAgent` never set `FailedSecret` on the `Request` they
+build — it stays at its zero value. `FailedSecret` only matters when a
+caller constructs a `Request` directly and calls `Resolve` after an
+authentication failure. `fullsend poll`'s `wrapGitLabAuthFailure` uses the
+`AuthFailed` helper for this instead of re-resolving: on a 401/403, it
+wraps the error with `gitlabroles.AuthFailed(role, mode, secret)` rather
+than calling `Select`/`SelectAgent`/`Resolve` again for that job. Per
+`AuthFailed`'s doc comment, callers must fail closed on an authentication
+failure, not re-Select with a different job or a cleared `FailedSecret`.
 
 The result is a `Source` whose `SecretName` is the CI/CD variable to
 read. Callers then `os.Getenv(src.SecretName)`. Built-in and custom
