@@ -305,6 +305,70 @@ func TestProvisionGitLabRoleCredentials_ProvidedTokenEnrolled(t *testing.T) {
 	}
 }
 
+func TestProvisionGitLabRoleCredentials_ProvidedTokenUnregisteredRole(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	tokens := &fakeTokens{}
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Tokens:   tokens,
+		Registry: gitlabroles.BuiltinRegistry(),
+		ProvidedTokens: map[gitlabroles.Role]string{
+			gitlabroles.Role("typo-role"): "irrelevant-value",
+		},
+	})
+	require.NoError(t, err)
+	var found bool
+	for _, f := range result.Failed {
+		if f.Role == gitlabroles.Role("typo-role") && f.Reason == "administrator-provided token does not match a registered role" {
+			found = true
+		}
+	}
+	assert.True(t, found)
+	assert.NotContains(t, tokens.createdNames(), "typo-role")
+	for _, d := range result.Diagnostics {
+		assertNoLeak(t, d)
+	}
+}
+
+func TestProvisionGitLabRoleCredentials_ProvidedTokenUnmaskable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	tokens := &fakeTokens{}
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Tokens:   tokens,
+		Registry: gitlabroles.BuiltinRegistry(),
+		ProvidedTokens: map[gitlabroles.Role]string{
+			gitlabroles.RolePoller: "short", // < 8 chars, cannot be masked
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Failed, 1)
+	assert.Equal(t, gitlabroles.RolePoller, result.Failed[0].Role)
+	assert.Contains(t, result.Failed[0].Reason, "cannot be masked")
+	assert.False(t, fc.Secrets["group/project/"+forge.SecretGitLabPollerToken])
+	for _, rec := range fc.CreatedSecrets {
+		assert.NotEqual(t, "short", rec.Value)
+	}
+}
+
+func TestCanMaskGitLabValue(t *testing.T) {
+	t.Parallel()
+	assert.True(t, canMaskGitLabValue("glpat-abcdefgh12345"))
+	assert.False(t, canMaskGitLabValue("short"))
+	assert.False(t, canMaskGitLabValue("has a space here"))
+	assert.False(t, canMaskGitLabValue("has\nnewline12345"))
+}
+
 func TestProvisionGitLabRoleCredentials_StoreFailureRevokesNewPATOnly(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -589,6 +653,9 @@ func TestProvisionGitLabRoleCredentials_EmptyTokenAndGateWriteError(t *testing.T
 			}
 		}
 		assert.True(t, found)
+		// The token was created with an ID before its (empty) value was
+		// found unusable; it must be revoked rather than left dangling.
+		assert.Contains(t, tokens.revoked, 1)
 	})
 
 	t.Run("gate write error", func(t *testing.T) {

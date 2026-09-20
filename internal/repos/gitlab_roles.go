@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -10,6 +11,18 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	"github.com/fullsend-ai/fullsend/internal/gitlabroles"
 )
+
+// gitlabMaskablePattern matches GitLab's allowed charset for a maskable
+// CI/CD variable value. A value outside this charset, shorter than 8
+// characters, or spanning multiple lines cannot be masked; GitLab would
+// otherwise silently fall back to storing it unmasked.
+var gitlabMaskablePattern = regexp.MustCompile(`^[a-zA-Z0-9@:.+/=_~-]+$`)
+
+// canMaskGitLabValue reports whether value meets GitLab's masking
+// constraints for a CI/CD variable (protected + masked secret).
+func canMaskGitLabValue(value string) bool {
+	return len(value) >= 8 && gitlabMaskablePattern.MatchString(value)
+}
 
 // ProjectAccessToken is the subset of a GitLab project access token
 // needed to store a role credential. Token is the secret value and is
@@ -135,13 +148,19 @@ func ProvisionGitLabRoleCredentials(ctx context.Context, cfg RoleProvisionConfig
 		return result, fmt.Errorf("reading GitLab role credential presence: %w", presErr)
 	}
 
+	// Write the gate (and registry) before creating any role tokens. If the
+	// gate write fails, no tokens are created and nothing is orphaned. If
+	// token creation subsequently fails partway through, the gate already
+	// reflects the desired mode, so a follow-up unflagged `repos install`
+	// sees the live gate as migrating/enforced and retries the missing
+	// roles instead of treating the repo as still on the legacy path.
 	skipTokens := mode.UsesSharedOnly()
-	if !skipTokens {
-		provisionOwnRoles(ctx, cfg, reg, present, &result)
-	}
-
 	if err := writeGitLabRoleGate(ctx, cfg, mode, skipTokens, &result); err != nil {
 		return result, err
+	}
+
+	if !skipTokens {
+		provisionOwnRoles(ctx, cfg, reg, present, &result)
 	}
 
 	present, presErr = gitLabRolePresence(ctx, cfg.Client, cfg.Owner, cfg.Repo, reg)
@@ -156,7 +175,31 @@ func ProvisionGitLabRoleCredentials(ctx context.Context, cfg RoleProvisionConfig
 	return result, nil
 }
 
+// validateProvidedTokenRoles records a failure for every
+// --gitlab-role-token key that does not match a registered role name, so
+// a misspelled or unregistered role name is never silently ignored.
+func validateProvidedTokenRoles(cfg RoleProvisionConfig, reg gitlabroles.Registry, result *RoleProvisionResult) {
+	if len(cfg.ProvidedTokens) == 0 {
+		return
+	}
+	roles := make([]gitlabroles.Role, 0, len(cfg.ProvidedTokens))
+	for role := range cfg.ProvidedTokens {
+		roles = append(roles, role)
+	}
+	sort.Slice(roles, func(i, j int) bool { return roles[i] < roles[j] })
+	for _, role := range roles {
+		if _, ok := reg.Lookup(role); !ok {
+			result.Failed = append(result.Failed, RoleProvisionFailure{
+				Role:   role,
+				Reason: "administrator-provided token does not match a registered role",
+			})
+		}
+	}
+}
+
 func provisionOwnRoles(ctx context.Context, cfg RoleProvisionConfig, reg gitlabroles.Registry, present map[string]bool, result *RoleProvisionResult) {
+	validateProvidedTokenRoles(cfg, reg, result)
+
 	now := cfg.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -174,6 +217,14 @@ func provisionOwnRoles(ctx context.Context, cfg RoleProvisionConfig, reg gitlabr
 			continue
 		}
 		if provided := strings.TrimSpace(cfg.ProvidedTokens[rec.Name]); provided != "" {
+			if !canMaskGitLabValue(provided) {
+				result.Failed = append(result.Failed, RoleProvisionFailure{
+					Role:   rec.Name,
+					Secret: secret,
+					Reason: "administrator-provided credential cannot be masked (must be a single line of at least 8 characters using GitLab's allowed charset)",
+				})
+				continue
+			}
 			if cfg.DryRun {
 				result.Enrolled = append(result.Enrolled, rec.Name)
 				continue
@@ -217,6 +268,9 @@ func provisionOwnRoles(ctx context.Context, cfg RoleProvisionConfig, reg gitlabr
 			continue
 		}
 		if tok == nil || strings.TrimSpace(tok.Token) == "" {
+			if tok != nil && tok.ID != 0 {
+				_ = cfg.Tokens.RevokeProjectAccessToken(ctx, cfg.Owner, cfg.Repo, tok.ID)
+			}
 			result.Failed = append(result.Failed, RoleProvisionFailure{
 				Role:   rec.Name,
 				Secret: secret,

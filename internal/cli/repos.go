@@ -356,6 +356,11 @@ func showGitLabRoleStatus(s repos.RepoStatus) bool {
 	switch s.GitLabRoleMode {
 	case string(gitlabroles.ModeMigrating), string(gitlabroles.ModeRollback), string(gitlabroles.ModeEnforced):
 		return true
+	case "":
+		// appendGitLabRoleStatus leaves GitLabRoleMode empty on a
+		// parse/read/registry error, but still records a diagnostic.
+		// Surface it in the table view too, not just JSON output.
+		return true
 	default:
 		return s.GitLabRolesPartial
 	}
@@ -963,6 +968,12 @@ func runReposInstall(ctx context.Context, opts *reposInstallConfig) error {
 	// setup when only the schedules exist) would still revoke/recreate
 	// the live fullsend-bot PAT or delete/recreate pipeline schedules
 	// that didn't need it, breaking in-flight pipelines.
+	// failedRepoKeys tracks owner/repo pairs that have already failed in an
+	// earlier stage (post-install setup, poll-state provisioning) so the
+	// role-provisioning pass below can skip them instead of double-counting
+	// them as both a stage failure and a role failure.
+	failedRepoKeys := make(map[string]bool)
+
 	var installedPostFail int
 	if !opts.dryRun && len(installed) > 0 {
 		for _, r := range installed {
@@ -981,12 +992,14 @@ func runReposInstall(ctx context.Context, opts *reposInstallConfig) error {
 			if fcErr != nil {
 				printer.StepWarn(fmt.Sprintf("[%s] Could not get GitLab client: %v", repoFullName, fcErr))
 				installedPostFail++
+				failedRepoKeys[repoFullName] = true
 				continue
 			}
 			glClient, ok := fc.Client.(*gl.LiveClient)
 			if !ok {
 				printer.StepWarn(fmt.Sprintf("[%s] GitLab client type assertion failed — post-install setup skipped", repoFullName))
 				installedPostFail++
+				failedRepoKeys[repoFullName] = true
 				continue
 			}
 
@@ -995,6 +1008,7 @@ func runReposInstall(ctx context.Context, opts *reposInstallConfig) error {
 				if botErr != nil {
 					printer.StepWarn(fmt.Sprintf("[%s] Bot token setup failed: %v", repoFullName, botErr))
 					installedPostFail++
+					failedRepoKeys[repoFullName] = true
 					continue
 				}
 			}
@@ -1040,18 +1054,21 @@ func runReposInstall(ctx context.Context, opts *reposInstallConfig) error {
 				pollStateFail++
 				r.Error = fcErr
 				pollStateFailedRepos = append(pollStateFailedRepos, r)
+				failedRepoKeys[r.Owner+"/"+r.Repo] = true
 				continue
 			}
 			if err := provisionGitLabPollState(ctx, fc.Client, printer, r.Owner, r.Repo); err != nil {
 				pollStateFail++
 				r.Error = err
 				pollStateFailedRepos = append(pollStateFailedRepos, r)
+				failedRepoKeys[r.Owner+"/"+r.Repo] = true
 			}
 		}
 	}
 
 	var roleFail int
 	var roleFailedRepos []repos.ConvergeResult
+	var roleFailInstalledCount int
 	{
 		type tagged struct {
 			r     repos.ConvergeResult
@@ -1068,7 +1085,10 @@ func runReposInstall(ctx context.Context, opts *reposInstallConfig) error {
 			all = append(all, tagged{r: r, fresh: false})
 		}
 		for _, item := range all {
-			if item.r.Error != nil {
+			// Skip repos that already failed at an earlier stage (post-install
+			// setup, poll-state provisioning) so they are not double-counted
+			// as both a stage failure and a role-provisioning failure.
+			if item.r.Error != nil || failedRepoKeys[item.r.Owner+"/"+item.r.Repo] {
 				continue
 			}
 			rc, ok := manifest.ResolveConfigWithGlobs(item.r.Owner, item.r.Repo)
@@ -1081,19 +1101,25 @@ func runReposInstall(ctx context.Context, opts *reposInstallConfig) error {
 				roleFail++
 				item.r.Error = fcErr
 				roleFailedRepos = append(roleFailedRepos, item.r)
+				if item.fresh {
+					roleFailInstalledCount++
+				}
 				continue
 			}
 			if err := maybeProvisionGitLabRoles(ctx, opts, fc.Client, printer, item.r.Owner, item.r.Repo, item.fresh); err != nil {
 				printer.StepWarn(fmt.Sprintf("[%s/%s] GitLab role provisioning failed: %v", item.r.Owner, item.r.Repo, err))
 				roleFail++
 				item.r.Error = err
+				if item.fresh {
+					roleFailInstalledCount++
+				}
 				roleFailedRepos = append(roleFailedRepos, item.r)
 			}
 		}
 	}
 
 	printer.Blank()
-	installedCount := len(installed) - installedPostFail
+	installedCount := len(installed) - installedPostFail - roleFailInstalledCount
 	failedCount := len(failed) + installedPostFail + pollStateFail + roleFail
 
 	for _, r := range failed {

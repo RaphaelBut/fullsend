@@ -712,6 +712,12 @@ func TestShowGitLabRoleStatus(t *testing.T) {
 		GitLabRolesPartial:    true,
 		GitLabRoleDiagnostics: []string{"partial"},
 	}))
+	// GitLabRoleMode is left empty by appendGitLabRoleStatus on a
+	// parse/read/registry error, but a diagnostic is still recorded — the
+	// table view must surface it, not just JSON output.
+	assert.True(t, showGitLabRoleStatus(repos.RepoStatus{
+		GitLabRoleDiagnostics: []string{"invalid GitLab role registry"},
+	}))
 }
 
 func TestMaybeProvisionGitLabRoles_FreshAndExistingMigrating(t *testing.T) {
@@ -821,6 +827,25 @@ func TestGitLabRoleWorkNeededExistingEnforced(t *testing.T) {
 	fake.Errors["GetRepoVariable"] = fmt.Errorf("denied")
 	_, _, err = gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{}, "g", "p", false)
 	require.Error(t, err)
+}
+
+func TestMaybeProvisionGitLabRoles_PreservesRollbackWithRegistryOnly(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.Secrets["group/project/"+forge.SecretForgeToken] = true
+	fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "rollback"
+	fake.VariablesExist["group/project/"+forge.VarGitLabRoleMigration] = true
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+
+	// Operator supplies only --gitlab-role-registry (no --gitlab-role-migration).
+	// A previously explicit rollback decision must not be silently
+	// overwritten back to migrating.
+	opts := &reposInstallConfig{gitlabRoleRegistryJSON: `{"roles":[]}`}
+
+	err := maybeProvisionGitLabRoles(ctx, opts, fake, printer, "group", "project", false)
+	require.NoError(t, err)
+	assert.Equal(t, "rollback", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
 }
 
 func TestSetupGitLabRoleCredentials_RegistryReadError(t *testing.T) {

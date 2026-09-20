@@ -314,36 +314,45 @@ func maybeProvisionGitLabRoles(ctx context.Context, opts *reposInstallConfig, cl
 	}
 	mode := opts.gitlabRoleModeFlag
 	if mode == "" {
-		if fresh {
-			mode = gitlabroles.ModeMigrating
-		} else if current == gitlabroles.ModeMigrating || current == gitlabroles.ModeEnforced {
-			mode = current
-		} else {
-			mode = gitlabroles.ModeMigrating
-		}
+		// Preserve the live gate's mode (migrating, enforced, rollback, or
+		// disabled) unless the operator explicitly passes
+		// --gitlab-role-migration. Without this, supplying only
+		// --gitlab-role-registry or --gitlab-role-token on an install that
+		// was explicitly rolled back or disabled would silently re-enable
+		// migration.
+		mode = current
 	}
 	return setupGitLabRoleCredentials(ctx, opts, client, printer, owner, repo, mode)
 }
 
 func gitLabRoleWorkNeeded(ctx context.Context, client forge.Client, opts *reposInstallConfig, owner, repo string, fresh bool) (bool, gitlabroles.Mode, error) {
-	if opts.gitlabRoleModeFlag != "" || opts.gitlabRoleRegistryJSON != "" || len(opts.gitlabRoleProvided) > 0 {
+	if opts.gitlabRoleModeFlag != "" {
 		return true, opts.gitlabRoleModeFlag, nil
 	}
 	if fresh {
 		return true, gitlabroles.ModeMigrating, nil
 	}
+	// The mode flag is empty: always read the live gate so an operator who
+	// only passes --gitlab-role-registry or --gitlab-role-token (without
+	// --gitlab-role-migration) gets their existing rollback/disabled/
+	// enforced decision back as current, rather than an empty mode that
+	// the caller would otherwise default to migrating.
 	raw, exists, err := client.GetRepoVariable(ctx, owner, repo, forge.VarGitLabRoleMigration)
 	if err != nil {
 		return false, "", fmt.Errorf("reading %s: %w", forge.VarGitLabRoleMigration, err)
 	}
-	if !exists {
-		return false, gitlabroles.ModeDisabled, nil
+	current := gitlabroles.ModeDisabled
+	if exists {
+		mode, err := gitlabroles.ParseMode(raw)
+		if err != nil {
+			return false, "", err
+		}
+		current = mode
 	}
-	mode, err := gitlabroles.ParseMode(raw)
-	if err != nil {
-		return false, "", err
+	if opts.gitlabRoleRegistryJSON != "" || len(opts.gitlabRoleProvided) > 0 {
+		return true, current, nil
 	}
-	return mode == gitlabroles.ModeMigrating || mode == gitlabroles.ModeEnforced, mode, nil
+	return current == gitlabroles.ModeMigrating || current == gitlabroles.ModeEnforced, current, nil
 }
 
 func setupGitLabRoleCredentials(ctx context.Context, opts *reposInstallConfig, client forge.Client, printer *ui.Printer, owner, repo string, mode gitlabroles.Mode) error {
@@ -408,7 +417,11 @@ func printGitLabRoleProvision(printer *ui.Printer, repoFullName string, result r
 		printer.StepWarn(fmt.Sprintf("[%s] %s role credential pending (%s): %s", repoFullName, f.Role, f.Secret, f.Reason))
 	}
 	if result.GateWritten {
-		printer.StepDone(fmt.Sprintf("[%s] GitLab role migration gate=%s (shared credential preserved)", repoFullName, result.Mode))
+		if result.DryRun {
+			printer.StepDone(fmt.Sprintf("[%s] Would set GitLab role migration gate=%s (shared credential preserved)", repoFullName, result.Mode))
+		} else {
+			printer.StepDone(fmt.Sprintf("[%s] GitLab role migration gate=%s (shared credential preserved)", repoFullName, result.Mode))
+		}
 	}
 	for _, d := range result.Diagnostics {
 		printer.StepInfo(fmt.Sprintf("[%s] %s", repoFullName, d))
