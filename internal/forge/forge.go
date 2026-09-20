@@ -62,8 +62,8 @@ const (
 	// These are not required on existing installations. Probe/converge must
 	// not treat their absence as health drift while migration mode is
 	// disabled. Built-in names are fixed; custom roles derive
-	// FULLSEND_GITLAB_ROLE_<NAME>_TOKEN. Provisioning is #7498; routing is
-	// #7499.
+	// FULLSEND_GITLAB_ROLE_<NAME>_TOKEN. Provisioning is #7498; job
+	// routing is #7499 (`internal/gitlabroles.Select`).
 	SecretGitLabPollerToken  = "FULLSEND_GITLAB_POLLER_TOKEN"
 	SecretGitLabAnalystToken = "FULLSEND_GITLAB_ANALYST_TOKEN"
 	SecretGitLabCoderToken   = "FULLSEND_GITLAB_CODER_TOKEN"

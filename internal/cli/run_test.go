@@ -6465,8 +6465,9 @@ func TestRunAgent_MintTokenError(t *testing.T) {
 }
 
 // TestRunAgent_GitLabSkipsMint verifies that mintAgentToken is not called
-// when --forge=gitlab. Minting is GitHub-only; on GitLab the bot PAT
-// (FULLSEND_FORGE_TOKEN) serves as the push/API token. #6865.
+// when --forge=gitlab. Minting is GitHub-only; on GitLab the registered
+// role credential (shared token while the migration gate is disabled)
+// serves as the push/API token. #6865 #7499.
 func TestRunAgent_GitLabSkipsMint(t *testing.T) {
 	useFakeOpenshell(t)
 	dir := t.TempDir()
@@ -6499,6 +6500,9 @@ func TestRunAgent_GitLabSkipsMint(t *testing.T) {
 
 	t.Setenv("FULLSEND_MINT_URL", "https://mint.example.com")
 	t.Setenv("REPO_FULL_NAME", "org/my-repo")
+	t.Setenv(forge.SecretForgeToken, "glpat-test-shared")
+	t.Setenv(forge.VarGitLabRoleMigration, "")
+	t.Setenv(forge.VarGitLabRoleRegistry, "")
 
 	var buf bytes.Buffer
 	rFlags := resolveFlags{maxDepth: 10, maxResources: 50}
@@ -6511,6 +6515,7 @@ func TestRunAgent_GitLabSkipsMint(t *testing.T) {
 	assert.Contains(t, err.Error(), "openshell")
 	// No "skipping token minting" warning on GitLab
 	assert.NotContains(t, buf.String(), "skipping token minting")
+	assert.NotContains(t, buf.String(), "glpat-")
 }
 
 // TestRunAgent_SetsEnvFromFlags verifies that run.go exports TARGET_REPO_DIR,

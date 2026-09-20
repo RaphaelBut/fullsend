@@ -54,9 +54,10 @@ administrator-registered custom roles — is defined in
 [gitlab-role-credentials.md](gitlab-role-credentials.md).
 `repos install` provisions those credentials additively (fresh installs
 and opted-in migrations) without revoking `FULLSEND_FORGE_TOKEN`.
-Job routing still uses the shared token until
-[#7499](https://github.com/fullsend-ai/fullsend/issues/7499). Do not
-assume GitLab jobs have per-role identities analogous to the GitHub App
-table above until routing lands. Role registration is install-state
-only; repository and merge-request content cannot create or elevate a
-GitLab role.
+When `FULLSEND_GITLAB_ROLE_MIGRATION` is `migrating` or `enforced`,
+`fullsend poll` and `fullsend run` select the registered role credential
+instead of the shared token (see
+[gitlab-role-credentials.md](gitlab-role-credentials.md)). Disabled and
+rollback keep the shared `fullsend-bot` identity. Role registration is
+install-state only; repository and merge-request content cannot create
+or elevate a GitLab role.

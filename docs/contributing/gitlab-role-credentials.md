@@ -13,18 +13,22 @@ and parent [#7496](https://github.com/fullsend-ai/fullsend/issues/7496).
 
 The Go package is [`internal/gitlabroles`](../../internal/gitlabroles/).
 Provisioning of built-in and custom role credentials is implemented by
-`repos install` (`internal/repos` / `internal/cli`). Routing, rotation,
-and shared-token retirement remain follow-up issues.
+`repos install` (`internal/repos` / `internal/cli`). Routing of jobs and
+forge operations by registered role is implemented by `fullsend poll`,
+`fullsend run`, and `fullsend post-review`. Rotation and shared-token
+retirement remain follow-up issues.
 
 Built-in and custom roles are the same kind of registry entry. Job
 credential selection walks that registry; it does not switch on a
 three-role enum.
 
-**Current runtime is unchanged.** When the migration gate is unset or
-`disabled`, jobs continue to authenticate with the shared
-`FULLSEND_FORGE_TOKEN` project access token described in
-[ADR 0067](../ADRs/0067-gitlab-cron-polling-event-dispatch.md). Custom
-roles are not required on existing installations.
+**Disabled-mode runtime is unchanged.** When the migration gate is unset
+or `disabled` (and on explicit `rollback`), jobs continue to authenticate
+with the shared `FULLSEND_FORGE_TOKEN` project access token described in
+[ADR 0067](../ADRs/0067-gitlab-cron-polling-event-dispatch.md). When the
+gate is `migrating` or `enforced`, `fullsend poll` and `fullsend run`
+select the registered role credential via `gitlabroles.Select` /
+`SelectAgent`. Custom roles are not required on existing installations.
 
 ## Registered roles
 
@@ -94,8 +98,9 @@ A custom role cannot:
 
 Harness `role:` and custom-agent names are validated with
 `Registry.ValidateAgent`. An unregistered name returns
-`ErrUnregistered`. Routing (#7499) is what enforces that at dispatch
-time; this contract defines the check.
+`ErrUnregistered`. `fullsend poll` / `fullsend run` call that check at
+dispatch time when the gate is `migrating` or `enforced`; this contract
+defines the check.
 
 ## Credential references
 
@@ -126,9 +131,10 @@ flags as least-privilege API grants.
 | `dispatch_pipeline`, `write_poll_state` | Poller |
 | `write_repository`, `write_merge_request` | Coder |
 
-`Registration.Has` is the check routing (#7499) will use so Analyst
-cannot perform code writes through the normal role configuration, and a
-custom role cannot exceed the capabilities the administrator declared.
+`Registration.Has` is the check routing uses so Analyst cannot perform
+code writes through the normal role configuration, a Coder job cannot
+approve a merge request, and a custom role cannot exceed the
+capabilities the administrator declared.
 
 ## Identifiers
 
@@ -194,8 +200,8 @@ Unmapped jobs (for example `e2e` or an unregistered custom agent) keep
 working on the shared token when the gate is `disabled` or `rollback`.
 In `migrating` and `enforced` they fail closed (`ErrUnregistered`)
 rather than guessing an identity. `ValidateAgent` itself takes no mode
-and always rejects an unmapped name, so routing (#7499) must only call
-it as a pre-check ahead of `Resolve` when the migration gate is
+and always rejects an unmapped name, so `Select` / `SelectAgent` only
+call it as a pre-check ahead of `Resolve` when the migration gate is
 `migrating` or `enforced`; calling it unconditionally ahead of the
 legacy `disabled`/`rollback` path would break existing installations
 that rely on unmapped jobs falling back to the shared token.
@@ -225,7 +231,9 @@ role-aware mode.
 
 ## How a job selects its credential
 
-Call `gitlabroles.Resolve` with:
+Call `gitlabroles.Select` (poller) or `gitlabroles.SelectAgent` (agent
+jobs). Those helpers load the gate, registry, and presence map, call
+`ValidateAgent` in `migrating`/`enforced`, then `Resolve`:
 
 - `Mode` from `gitlabroles.ModeFrom` (the gate variable)
 - `Job` (`PollerJob()` or `AgentJob(name)`)
@@ -239,9 +247,16 @@ The result is a `Source` whose `SecretName` is the CI/CD variable to
 read. Callers then `os.Getenv(src.SecretName)`. Built-in and custom
 roles return through this same function.
 
-Routing (#7499) is what wires `Resolve` into `fullsend poll`,
-`fullsend run`, and GitLab CI templates. Until then, those paths keep
-reading `FULLSEND_FORGE_TOKEN` directly.
+`fullsend poll` selects the Poller credential. `fullsend run` selects
+the agent identity (agent name, or harness `role:` if the agent name is
+unlisted), exports `GITLAB_TOKEN` from that secret, and sets
+`PUSH_TOKEN` only when the registration declares `write_repository`.
+`fullsend post-review` refuses GitLab `APPROVE` when the identity lacks
+`approve_merge_request`. Role-aware modes also publish non-secret
+diagnostic env vars `FULLSEND_GITLAB_ROLE`,
+`FULLSEND_GITLAB_ROLE_SECRET`, and `FULLSEND_GITLAB_ROLE_SOURCE`.
+GitLab CI templates still read `FULLSEND_FORGE_TOKEN` for bootstrap API
+calls; the Go CLI overrides the token used for forge operations.
 
 ## Unconfigured vs unregistered vs failed
 
@@ -350,7 +365,7 @@ Leave these to the follow-up issues.
 | Issue | Work |
 | --- | --- |
 | [#7498](https://github.com/fullsend-ai/fullsend/issues/7498) | **Implemented.** `repos install` creates/enrolls built-in and custom PATs, stores them as protected masked CI variables, writes the registry, sets the gate, reports partial provisioning, preserves the shared token, and handles reinstall/drift/uninstall without deleting credentials still in use |
-| [#7499](https://github.com/fullsend-ai/fullsend/issues/7499) | Wire `Resolve` and `ValidateAgent` into poll, agent, and forge operations so each job uses only its registered role |
+| [#7499](https://github.com/fullsend-ai/fullsend/issues/7499) | **Implemented.** `fullsend poll`, `fullsend run`, and `fullsend post-review` select the registered role credential, enforce `ValidateAgent` / `Registration.Has` in role-aware modes, and fail closed on authentication failure without switching identities |
 | [#7500](https://github.com/fullsend-ai/fullsend/issues/7500) | Rotation, recovery, in-flight jobs, expiry/revocation diagnostics |
 | [#7501](https://github.com/fullsend-ai/fullsend/issues/7501) | Verification, enable `enforced`, retire the shared token |
 | [#7502](https://github.com/fullsend-ai/fullsend/issues/7502) | ADR 0067 status annotation and operator-facing lifecycle docs |

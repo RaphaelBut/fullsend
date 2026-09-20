@@ -895,10 +895,10 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 	// privilege level (ADR 0073). Pre-script remints a different level
 	// around the script, then restores; post-script remints separately
 	// (#7231) so a full-budget run does not hand it an expired token.
-	// Minting is GitHub-only — on GitLab the bot PAT (FULLSEND_FORGE_TOKEN)
-	// serves as the push/API token, provisioned via CI/CD variables. Skip
-	// minting entirely to avoid a spurious "skipping token minting" warning
-	// and setting PUSH_TOKEN_SOURCE to a GitHub-specific value. #6865.
+	// Minting is GitHub-only. On GitLab, select the registered role
+	// credential (Poller/Analyst/Coder or a custom role) and export
+	// GITLAB_TOKEN / PUSH_TOKEN from that CI/CD variable. Disabled and
+	// rollback keep the shared FULLSEND_FORGE_TOKEN path. #6865 #7499.
 	mintURL := sOpts.mintURL
 	if mintURL == "" {
 		mintURL = os.Getenv("FULLSEND_MINT_URL")
@@ -908,6 +908,9 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 	var mintCleanup func()
 	if forgePlatform == "gitlab" {
 		mintCleanup = func() {}
+		if roleErr := applyGitLabAgentCredentials(agentName, h.Role, os.Getenv, setFlagEnv, printer); roleErr != nil {
+			return roleErr
+		}
 	} else {
 		var mintErr error
 		minted, mintCleanup, mintErr = mintAgentTokenAtLevel(ctx, h.Role, mintURL, forgePlatform, runtimeLevel, printer)

@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	gh "github.com/fullsend-ai/fullsend/internal/forge/github"
+	"github.com/fullsend-ai/fullsend/internal/gitlabroles"
 	"github.com/fullsend-ai/fullsend/internal/sticky"
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
@@ -1919,4 +1922,26 @@ func TestNewPostReviewCmd_FullsendDirDefaultsEmptyWithoutEnvVar(t *testing.T) {
 	f := cmd.Flags().Lookup("fullsend-dir")
 	require.NotNil(t, f)
 	assert.Equal(t, "", f.DefValue, "fullsend-dir should default to empty when $FULLSEND_DIR is unset")
+}
+
+func TestPostReviewCmd_GitLabCoderCannotApprove(t *testing.T) {
+	t.Setenv(forge.VarGitLabRoleMigration, "enforced")
+	t.Setenv(forge.VarGitLabRoleRegistry, "")
+	t.Setenv(forge.SecretForgeToken, "shared")
+	t.Setenv(forge.SecretGitLabPollerToken, "p")
+	t.Setenv(forge.SecretGitLabAnalystToken, "a")
+	t.Setenv(forge.SecretGitLabCoderToken, "c")
+	t.Setenv(envGitLabRole, "coder")
+	t.Setenv("GITLAB_TOKEN", "glpat-test")
+
+	dir := t.TempDir()
+	result := filepath.Join(dir, "result.json")
+	require.NoError(t, os.WriteFile(result, []byte(`{"action":"approve","body":"ok"}`), 0o644))
+
+	cmd := newPostReviewCmd()
+	cmd.SetArgs([]string{"--repo", "group/project", "--pr", "1", "--forge", "gitlab", "--result", result})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, gitlabroles.ErrCapabilityDenied)
+	assert.NotContains(t, err.Error(), "glpat-")
 }
