@@ -14,6 +14,13 @@ import (
 // configuration.
 var ErrCapabilityDenied = errors.New("GitLab role lacks required capability")
 
+// ErrIdentityMismatch indicates the token that will actually authenticate
+// a GitLab API call does not match the CI/CD variable value for the
+// dispatch-selected role. A capability check against the selected role is
+// meaningless if a different credential ends up authenticating the call,
+// so callers must verify the two agree before trusting Require's result.
+var ErrIdentityMismatch = errors.New("authenticating GitLab token does not match selected role credential")
+
 // Selection is the dispatch-time result of loading the migration gate,
 // trusted registry, and secret-presence map, then resolving a job to a
 // credential. Diagnostics and Error values carry secret *names* only.

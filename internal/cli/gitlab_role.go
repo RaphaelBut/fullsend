@@ -71,6 +71,7 @@ func applyGitLabRoleSelection(sel gitlabroles.Selection, token string, setenv fu
 	if sel.Mode.UsesSharedOnly() {
 		return
 	}
+	clearSiblingGitLabRoleSecrets(sel, setenv)
 	if sel.Registration.Has(gitlabroles.CapWriteRepository) {
 		setenv("PUSH_TOKEN", token)
 		setenv("PUSH_TOKEN_SOURCE", "pat")
@@ -79,6 +80,25 @@ func applyGitLabRoleSelection(sel gitlabroles.Selection, token string, setenv fu
 	// Analyst, Poller, and custom roles without write_repository must
 	// not inherit the shared PUSH_TOKEN exported by CI templates.
 	setenv("PUSH_TOKEN", "")
+}
+
+// clearSiblingGitLabRoleSecrets blanks every registered role secret (and
+// the shared FULLSEND_FORGE_TOKEN) that sel.Present reports as configured
+// but that is not the credential this job selected. Without this, a
+// sibling secret such as FULLSEND_GITLAB_ANALYST_TOKEN remains sitting in
+// the process environment after a Coder job selects its own token; a
+// host-side pre/post-script inherits the whole process environment (see
+// childScriptEnv) and could read that sibling secret directly and
+// authenticate to GitLab as Analyst, bypassing checkGitLabApprovalCapability
+// entirely — that check only runs inside `fullsend post-review` itself, not
+// for arbitrary script code reading a raw CI/CD variable (see PR #7510).
+func clearSiblingGitLabRoleSecrets(sel gitlabroles.Selection, setenv func(string, string)) {
+	for name, present := range sel.Present {
+		if !present || name == sel.Source.SecretName {
+			continue
+		}
+		setenv(name, "")
+	}
 }
 
 func logGitLabRoleDiagnostics(sel gitlabroles.Selection, printer *ui.Printer) {
@@ -112,10 +132,22 @@ func wrapGitLabAuthFailure(sel gitlabroles.Selection, err error) error {
 }
 
 // checkGitLabApprovalCapability rejects GitLab APPROVE reviews when the
-// running identity does not declare approve_merge_request. Disabled and
-// rollback keep the shared-token path so existing installations are
-// unchanged. getenv nil means os.Getenv.
-func checkGitLabApprovalCapability(forgeName, action string, getenv func(string) string) error {
+// identity that will actually authenticate the approve call does not
+// declare approve_merge_request. Disabled and rollback keep the
+// shared-token path so existing installations are unchanged. getenv nil
+// means os.Getenv.
+//
+// token is the credential post-review will use to authenticate the
+// approve call (resolvePostReviewClient prefers --token, then
+// GITLAB_TOKEN). The running identity is derived from
+// FULLSEND_GITLAB_ROLE / STAGE labels, which is necessary to select a
+// registration but is not sufficient on its own: label and token can
+// diverge (e.g. --token pointing at a different role's secret), so the
+// selected identity's own secret value is compared against token before
+// its capability is trusted. A mismatch fails closed with
+// ErrIdentityMismatch rather than silently checking the wrong identity's
+// capabilities (see PR #7510).
+func checkGitLabApprovalCapability(forgeName, action, token string, getenv func(string) string) error {
 	if forgeName != repos.ForgeGitLab {
 		return nil
 	}
@@ -137,10 +169,22 @@ func checkGitLabApprovalCapability(forgeName, action string, getenv func(string)
 	if agentName == "" {
 		agentName = strings.TrimSpace(getenv("STAGE"))
 	}
-	harnessRole := strings.TrimSpace(getenv(envGitLabRole))
-	sel, err := gitlabroles.SelectAgent(agentName, harnessRole, getenv)
+	sel, err := gitlabroles.SelectAgent(agentName, agentName, getenv)
 	if err != nil {
 		return err
+	}
+	authToken := strings.TrimSpace(token)
+	if authToken == "" {
+		authToken = strings.TrimSpace(getenv("GITLAB_TOKEN"))
+	}
+	secretValue := strings.TrimSpace(getenv(sel.Source.SecretName))
+	if authToken == "" || secretValue == "" || authToken != secretValue {
+		return &gitlabroles.Error{
+			Role:   sel.Source.Role,
+			Mode:   mode,
+			Secret: sel.Source.SecretName,
+			Err:    gitlabroles.ErrIdentityMismatch,
+		}
 	}
 	return gitlabroles.Require(sel.Registration, gitlabroles.CapApproveMergeRequest)
 }

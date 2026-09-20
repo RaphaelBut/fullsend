@@ -1932,7 +1932,11 @@ func TestPostReviewCmd_GitLabCoderCannotApprove(t *testing.T) {
 	t.Setenv(forge.SecretGitLabAnalystToken, "a")
 	t.Setenv(forge.SecretGitLabCoderToken, "c")
 	t.Setenv(envGitLabRole, "coder")
-	t.Setenv("GITLAB_TOKEN", "glpat-test")
+	// GITLAB_TOKEN must match the coder secret value ("c") so the
+	// approve call authenticates as the identity the capability check
+	// evaluates; otherwise it now fails on identity mismatch first (see
+	// PR #7510).
+	t.Setenv("GITLAB_TOKEN", "c")
 
 	dir := t.TempDir()
 	result := filepath.Join(dir, "result.json")

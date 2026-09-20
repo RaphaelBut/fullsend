@@ -174,6 +174,33 @@ func TestApplyGitLabAgentCredentialsCustomRole(t *testing.T) {
 	assert.Equal(t, "scanner", got[envGitLabRole])
 }
 
+// TestApplyGitLabAgentCredentialsClearsSiblingSecrets verifies the
+// auth-bypass/privilege-escalation fix from the review on PR #7510: after a
+// role is selected, every other registered role secret (and the shared
+// FULLSEND_FORGE_TOKEN) that was present in the environment is blanked so a
+// host-side pre/post-script inheriting the process environment cannot read
+// a sibling role's raw token and authenticate as a different identity.
+func TestApplyGitLabAgentCredentialsClearsSiblingSecrets(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{
+		forge.VarGitLabRoleMigration:   "enforced",
+		forge.SecretForgeToken:         "glpat-SHARED",
+		forge.SecretGitLabPollerToken:  "glpat-POLLER",
+		forge.SecretGitLabAnalystToken: "glpat-ANALYST",
+		forge.SecretGitLabCoderToken:   "glpat-CODER",
+	}
+	got := map[string]string{}
+	setenv := func(k, v string) { got[k] = v }
+	err := applyGitLabAgentCredentials("code", "coder", mapGetenv(env), setenv, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "glpat-CODER", got["GITLAB_TOKEN"])
+	assert.Equal(t, "", got[forge.SecretForgeToken], "shared token must be blanked, not left for a script to read")
+	assert.Equal(t, "", got[forge.SecretGitLabPollerToken], "sibling Poller secret must be blanked")
+	assert.Equal(t, "", got[forge.SecretGitLabAnalystToken], "sibling Analyst secret must be blanked")
+	_, coderSecretTouched := got[forge.SecretGitLabCoderToken]
+	assert.False(t, coderSecretTouched, "the selected role's own secret variable is left untouched")
+}
+
 func TestApplyGitLabAgentCredentialsUnregistered(t *testing.T) {
 	t.Parallel()
 	env := map[string]string{
@@ -215,7 +242,7 @@ func TestCheckGitLabApprovalCapability(t *testing.T) {
 		t.Parallel()
 		env := copyStringMap(base)
 		env[envGitLabRole] = "coder"
-		err := checkGitLabApprovalCapability("gitlab", "approve", mapGetenv(env))
+		err := checkGitLabApprovalCapability("gitlab", "approve", "c", mapGetenv(env))
 		require.Error(t, err)
 		assert.ErrorIs(t, err, gitlabroles.ErrCapabilityDenied)
 		assert.NotContains(t, err.Error(), "glpat-")
@@ -224,23 +251,23 @@ func TestCheckGitLabApprovalCapability(t *testing.T) {
 		t.Parallel()
 		env := copyStringMap(base)
 		env[envGitLabRole] = "analyst"
-		require.NoError(t, checkGitLabApprovalCapability("gitlab", "approve", mapGetenv(env)))
+		require.NoError(t, checkGitLabApprovalCapability("gitlab", "approve", "a", mapGetenv(env)))
 	})
 	t.Run("review stage can approve", func(t *testing.T) {
 		t.Parallel()
 		env := copyStringMap(base)
 		env["STAGE"] = "review"
-		require.NoError(t, checkGitLabApprovalCapability("gitlab", "approve", mapGetenv(env)))
+		require.NoError(t, checkGitLabApprovalCapability("gitlab", "approve", "a", mapGetenv(env)))
 	})
 	t.Run("comment skips check", func(t *testing.T) {
 		t.Parallel()
 		env := copyStringMap(base)
 		env[envGitLabRole] = "coder"
-		require.NoError(t, checkGitLabApprovalCapability("gitlab", "comment", mapGetenv(env)))
+		require.NoError(t, checkGitLabApprovalCapability("gitlab", "comment", "", mapGetenv(env)))
 	})
 	t.Run("github skips check", func(t *testing.T) {
 		t.Parallel()
-		require.NoError(t, checkGitLabApprovalCapability("github", "approve", mapGetenv(base)))
+		require.NoError(t, checkGitLabApprovalCapability("github", "approve", "", mapGetenv(base)))
 	})
 	t.Run("disabled allows coder approve", func(t *testing.T) {
 		t.Parallel()
@@ -248,14 +275,38 @@ func TestCheckGitLabApprovalCapability(t *testing.T) {
 			forge.SecretForgeToken: "shared",
 			envGitLabRole:          "coder",
 		}
-		require.NoError(t, checkGitLabApprovalCapability("gitlab", "approve", mapGetenv(env)))
+		require.NoError(t, checkGitLabApprovalCapability("gitlab", "approve", "", mapGetenv(env)))
 	})
 	t.Run("enforced without identity fails closed", func(t *testing.T) {
 		t.Parallel()
 		env := copyStringMap(base)
-		err := checkGitLabApprovalCapability("gitlab", "approve", mapGetenv(env))
+		err := checkGitLabApprovalCapability("gitlab", "approve", "", mapGetenv(env))
 		require.Error(t, err)
 		assert.ErrorIs(t, err, gitlabroles.ErrUnknownJob)
+	})
+	t.Run("token from GITLAB_TOKEN env matching selected secret can approve", func(t *testing.T) {
+		t.Parallel()
+		env := copyStringMap(base)
+		env[envGitLabRole] = "analyst"
+		env["GITLAB_TOKEN"] = "a"
+		require.NoError(t, checkGitLabApprovalCapability("gitlab", "approve", "", mapGetenv(env)))
+	})
+	t.Run("token authenticating as a different identity is denied", func(t *testing.T) {
+		t.Parallel()
+		env := copyStringMap(base)
+		env[envGitLabRole] = "analyst"
+		err := checkGitLabApprovalCapability("gitlab", "approve", "c", mapGetenv(env))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, gitlabroles.ErrIdentityMismatch)
+		assert.NotContains(t, err.Error(), "glpat-")
+	})
+	t.Run("no token available is denied", func(t *testing.T) {
+		t.Parallel()
+		env := copyStringMap(base)
+		env[envGitLabRole] = "analyst"
+		err := checkGitLabApprovalCapability("gitlab", "approve", "", mapGetenv(env))
+		require.Error(t, err)
+		assert.ErrorIs(t, err, gitlabroles.ErrIdentityMismatch)
 	})
 }
 
@@ -322,14 +373,14 @@ func TestApplyGitLabRoleSelectionNilSetenv(t *testing.T) {
 
 func TestCheckGitLabApprovalCapabilityInvalidMode(t *testing.T) {
 	t.Parallel()
-	err := checkGitLabApprovalCapability("gitlab", "approve", func(string) string { return "nope" })
+	err := checkGitLabApprovalCapability("gitlab", "approve", "", func(string) string { return "nope" })
 	require.Error(t, err)
 	assert.ErrorIs(t, err, gitlabroles.ErrInvalidMode)
 }
 
 func TestCheckGitLabApprovalCapabilityNilGetenvDisabled(t *testing.T) {
 	t.Setenv(forge.VarGitLabRoleMigration, "")
-	require.NoError(t, checkGitLabApprovalCapability("gitlab", "approve", nil))
+	require.NoError(t, checkGitLabApprovalCapability("gitlab", "approve", "", nil))
 }
 
 func TestResolveGitLabPollerCredentialMigratingFallback(t *testing.T) {

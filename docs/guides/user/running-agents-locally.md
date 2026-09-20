@@ -333,7 +333,7 @@ fullsend run triage \
   --run-url "https://github.com/myorg/myrepo/actions/runs/12345"
 ```
 
-For GitLab repositories, use `--forge gitlab` instead of `--mint-url`. The agent reads `GITLAB_TOKEN` from the environment and does not require the mint service. See the [operations guide](../getting-started/operations.md#gitlab-ci) for required environment variables. Self-hosted instances that use a private CA have a separate [certificate-provisioning contract](../getting-started/operations.md#private-ca-self-hosted-gitlab).
+For GitLab repositories, use `--forge gitlab` instead of `--mint-url`. The agent resolves its credential through the [GitLab role-credential contract](../../contributing/gitlab-role-credentials.md) and exports `GITLAB_TOKEN` (and `PUSH_TOKEN`, for roles with repository-write access) itself; it does not require the mint service. While the migration gate is unset, `disabled`, or `rollback`, this requires `FULLSEND_FORGE_TOKEN` in the environment (setting `GITLAB_TOKEN` directly is no longer sufficient on its own). Once the gate is `migrating` or `enforced`, the matching per-role token (Poller/Analyst/Coder, or a registered custom role) is used instead. See the [operations guide](../getting-started/operations.md#gitlab-ci) for required environment variables. Self-hosted instances that use a private CA have a separate [certificate-provisioning contract](../getting-started/operations.md#private-ca-self-hosted-gitlab).
 
 Status comment behavior is configured via `status_notifications` in
 `config.yaml`. See [Status Notifications](customizing-agents.md#status-notifications).

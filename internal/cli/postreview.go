@@ -111,7 +111,7 @@ GITLAB_TOKEN for GitLab and GH_TOKEN / GITHUB_TOKEN for GitHub.`,
 
 			printer.Header("Post Review")
 
-			if err := checkGitLabApprovalCapability(forgeName, parsed.Action, os.Getenv); err != nil {
+			if err := checkGitLabApprovalCapability(forgeName, parsed.Action, token, os.Getenv); err != nil {
 				return err
 			}
 
