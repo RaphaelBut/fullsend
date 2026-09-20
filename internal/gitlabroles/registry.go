@@ -382,13 +382,36 @@ func (r *Registry) add(rec Registration) error {
 			return fmt.Errorf("role %q: unknown capability %q", rec.Name, cap)
 		}
 	}
+
+	// Every role's own name occupies its slot in the RoleFor lookup
+	// space even when it is not explicitly listed in Agents (builtins
+	// always list their own name; custom roles do not have to). Fold
+	// it into the same key set as the explicit agent list so both the
+	// byAgent-collision check below and the byName check catch a later
+	// role that tries to claim this name via its own agents list,
+	// regardless of registration order.
+	agentKeys := make([]string, 0, len(rec.Agents)+1)
+	agentKeySeen := make(map[string]struct{}, len(rec.Agents)+1)
+	ownKey := string(rec.Name)
+	agentKeys = append(agentKeys, ownKey)
+	agentKeySeen[ownKey] = struct{}{}
 	for _, agent := range rec.Agents {
 		key := strings.TrimSpace(agent)
 		if !validRoleName(key) {
 			return fmt.Errorf("role %q: invalid agent name %q", rec.Name, agent)
 		}
+		if _, dup := agentKeySeen[key]; dup {
+			continue
+		}
+		agentKeySeen[key] = struct{}{}
+		agentKeys = append(agentKeys, key)
+	}
+	for _, key := range agentKeys {
 		if existing, ok := r.byAgent[key]; ok {
 			return fmt.Errorf("agent %q is already mapped to role %q", key, existing)
+		}
+		if existing, ok := r.byName[Role(key)]; ok {
+			return fmt.Errorf("agent %q collides with role %q already registered", key, r.roles[existing].Name)
 		}
 		r.byAgent[key] = rec.Name
 	}
@@ -437,18 +460,29 @@ func registrationFromFile(row registryRole) (Registration, error) {
 	if !validRoleName(name) {
 		return Registration{}, fmt.Errorf("invalid role name %q", row.Name)
 	}
-	kind := CredentialKind(strings.ToLower(strings.TrimSpace(row.Credential)))
+	credentialRaw := strings.TrimSpace(row.Credential)
+	if looksLikeSecretValue(credentialRaw) {
+		return Registration{}, fmt.Errorf("credential must be \"own\" or \"reuse\", not a secret value")
+	}
+	kind := CredentialKind(strings.ToLower(credentialRaw))
 	if kind == "" {
 		kind = CredentialOwn
 	}
 	caps := make([]Capability, 0, len(row.Capabilities))
 	for _, c := range row.Capabilities {
 		capName := strings.TrimSpace(c)
+		if looksLikeSecretValue(capName) {
+			return Registration{}, fmt.Errorf("capabilities must not contain a secret value")
+		}
 		caps = append(caps, Capability(capName))
 	}
 	agents := make([]string, 0, len(row.Agents))
 	for _, a := range row.Agents {
-		agents = append(agents, strings.TrimSpace(a))
+		agentName := strings.TrimSpace(a)
+		if looksLikeSecretValue(agentName) {
+			return Registration{}, fmt.Errorf("agents must not contain a secret value")
+		}
+		agents = append(agents, agentName)
 	}
 	secret := strings.TrimSpace(row.SecretName)
 	if looksLikeSecretValue(secret) {

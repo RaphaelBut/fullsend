@@ -254,8 +254,12 @@ These are different errors. Do not collapse them.
 | Gate value is not a known mode | `ErrInvalidMode` | Fail closed |
 | Registry JSON is malformed or untrusted | `ErrInvalidRegistry` | Fail closed; do not load custom roles |
 
-`ErrUnconfigured` in `migrating` may still resolve to the shared token
-(explicit fallback). `ErrUnregistered` and `ErrAuthFailed` must not.
+In `migrating`, a registered role whose secret is absent but whose
+shared token is present is **not** `ErrUnconfigured` — `Resolve`
+returns a successful `Source` with `Fallback` set (explicit migration
+fallback). `ErrUnconfigured` in `migrating` means both the role secret
+and the shared token are absent. `ErrUnregistered` and `ErrAuthFailed`
+never fall back to the shared token in any mode.
 
 ## No silent fallback on authentication failure
 

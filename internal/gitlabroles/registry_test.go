@@ -436,6 +436,22 @@ func TestParseRegistryRejectsNameStealingBuiltinAgentAlias(t *testing.T) {
 	assert.Equal(t, RoleAnalyst, rec.Name)
 }
 
+func TestParseRegistryRejectsAgentStealingEarlierCustomRoleName(t *testing.T) {
+	t.Parallel()
+	_, err := ParseRegistry(`{"roles":[
+		{"name":"scanner"},
+		{"name":"other","agents":["scanner"]}
+	]}`)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRegistry)
+	assert.Contains(t, err.Error(), "already mapped")
+
+	reg := mustParseRegistry(t, `{"roles":[{"name":"scanner"}]}`)
+	rec, ok := reg.RoleFor("scanner")
+	require.True(t, ok)
+	assert.Equal(t, Role("scanner"), rec.Name)
+}
+
 func TestParseRegistryRejectsSecretValueAsName(t *testing.T) {
 	t.Parallel()
 	_, err := ParseRegistry(`{"roles":[{"name":"glpat-secretvalue"}]}`)
@@ -447,6 +463,30 @@ func TestParseRegistryRejectsSecretValueAsName(t *testing.T) {
 func TestParseRegistryRejectsSecretValueAsReuse(t *testing.T) {
 	t.Parallel()
 	_, err := ParseRegistry(`{"roles":[{"name":"scanner","credential":"reuse","reuse":"glpat-secretvalue"}]}`)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRegistry)
+	assert.NotContains(t, err.Error(), "glpat-secretvalue")
+}
+
+func TestParseRegistryRejectsSecretValueAsCredential(t *testing.T) {
+	t.Parallel()
+	_, err := ParseRegistry(`{"roles":[{"name":"scanner","credential":"glpat-secretvalue"}]}`)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRegistry)
+	assert.NotContains(t, err.Error(), "glpat-secretvalue")
+}
+
+func TestParseRegistryRejectsSecretValueAsCapability(t *testing.T) {
+	t.Parallel()
+	_, err := ParseRegistry(`{"roles":[{"name":"scanner","capabilities":["glpat-secretvalue"]}]}`)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRegistry)
+	assert.NotContains(t, err.Error(), "glpat-secretvalue")
+}
+
+func TestParseRegistryRejectsSecretValueAsAgent(t *testing.T) {
+	t.Parallel()
+	_, err := ParseRegistry(`{"roles":[{"name":"scanner","agents":["glpat-secretvalue"]}]}`)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrInvalidRegistry)
 	assert.NotContains(t, err.Error(), "glpat-secretvalue")
