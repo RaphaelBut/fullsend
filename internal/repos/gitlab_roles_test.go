@@ -244,6 +244,50 @@ func TestProvisionGitLabRoleCredentials_RollbackDoesNotCreateOrDelete(t *testing
 	assert.False(t, hasRegistry)
 }
 
+func TestProvisionGitLabRoleCredentials_RollbackWithExplicitInputWarnsIgnored(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	tokens := &fakeTokens{}
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:            "group",
+		Repo:             "project",
+		Client:           fc,
+		Tokens:           tokens,
+		Registry:         gitlabroles.BuiltinRegistry(),
+		RegistryProvided: true,
+		ProvidedTokens:   map[gitlabroles.Role]string{gitlabroles.RolePoller: "provided-poller-token"},
+		DesiredMode:      gitlabroles.ModeRollback,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.Created)
+	assert.Empty(t, result.Enrolled)
+	assert.False(t, result.RegistryWritten)
+	joined := strings.Join(result.Diagnostics, "\n")
+	assert.Contains(t, joined, "--gitlab-role-registry/--gitlab-role-token input was ignored")
+	assert.NotContains(t, joined, "provided-poller-token")
+}
+
+func TestProvisionGitLabRoleCredentials_RollbackWithoutExplicitInputNoWarning(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fc := provisionClient(t)
+	tokens := &fakeTokens{}
+
+	result, err := ProvisionGitLabRoleCredentials(ctx, RoleProvisionConfig{
+		Owner:       "group",
+		Repo:        "project",
+		Client:      fc,
+		Tokens:      tokens,
+		Registry:    gitlabroles.BuiltinRegistry(),
+		DesiredMode: gitlabroles.ModeRollback,
+	})
+	require.NoError(t, err)
+	joined := strings.Join(result.Diagnostics, "\n")
+	assert.NotContains(t, joined, "input was ignored")
+}
+
 func TestProvisionGitLabRoleCredentials_ReinstallDoesNotRevoke(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

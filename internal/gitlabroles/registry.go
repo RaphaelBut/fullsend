@@ -510,10 +510,14 @@ func registrationFromFile(row registryRole) (Registration, error) {
 	if looksLikeSecretValue(reuse) {
 		return Registration{}, fmt.Errorf("reuse must be a role name, not a secret value")
 	}
+	responsibility := strings.TrimSpace(row.Responsibility)
+	if looksLikeSecretValue(responsibility) {
+		return Registration{}, fmt.Errorf("responsibility must not contain a secret value")
+	}
 	rec := Registration{
 		Name:           Role(name),
 		Kind:           RoleKindCustom,
-		Responsibility: strings.TrimSpace(row.Responsibility),
+		Responsibility: responsibility,
 		Credential: CredentialRef{
 			Kind:       kind,
 			SecretName: secret,

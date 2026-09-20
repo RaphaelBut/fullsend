@@ -1351,7 +1351,7 @@ func runReposUninstall(ctx context.Context, opts *reposUninstallConfig, repoArgs
 					_ = cleanupGitLabBotToken(ctx, glClient, printer, r.Owner, r.Repo)
 					_ = cleanupGitLabRoleTokens(ctx, glClient, printer, r.Owner, r.Repo)
 				} else {
-					printer.StepWarn(fmt.Sprintf("[%s] GitLab client type assertion failed — bot token cleanup skipped", repoFullName))
+					printer.StepWarn(fmt.Sprintf("[%s] GitLab client type assertion failed — bot and role token cleanup skipped", repoFullName))
 				}
 
 			}

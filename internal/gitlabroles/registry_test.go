@@ -492,6 +492,14 @@ func TestParseRegistryRejectsSecretValueAsAgent(t *testing.T) {
 	assert.NotContains(t, err.Error(), "glpat-secretvalue")
 }
 
+func TestParseRegistryRejectsSecretValueAsResponsibility(t *testing.T) {
+	t.Parallel()
+	_, err := ParseRegistry(`{"roles":[{"name":"scanner","responsibility":"glpat-secretvalue"}]}`)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRegistry)
+	assert.NotContains(t, err.Error(), "glpat-secretvalue")
+}
+
 func TestParseRegistryExplicitMatchingSecretName(t *testing.T) {
 	t.Parallel()
 	reg := mustParseRegistry(t, `{

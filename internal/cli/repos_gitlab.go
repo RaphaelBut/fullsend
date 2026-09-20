@@ -330,6 +330,14 @@ func gitLabRoleWorkNeeded(ctx context.Context, client forge.Client, opts *reposI
 		return true, opts.gitlabRoleModeFlag, nil
 	}
 	if fresh {
+		// If FULLSEND_GITLAB_ROLE_MIGRATION fails to write on this fresh
+		// install, the failure is reported on this run, but the repo is
+		// no longer "fresh" on a later unflagged `repos install` (the
+		// workflow is now on the default branch). That later run falls
+		// through to the live-gate read below, finds the gate still
+		// missing, treats it as ModeDisabled, and reports "no work
+		// needed" instead of retrying. Recovery requires the operator to
+		// explicitly re-run with --gitlab-role-migration=migrating.
 		return true, gitlabroles.ModeMigrating, nil
 	}
 	// The mode flag is empty: always read the live gate so an operator who
@@ -377,14 +385,15 @@ func setupGitLabRoleCredentials(ctx context.Context, opts *reposInstallConfig, c
 	}
 	printer.StepStart(fmt.Sprintf("[%s] Provisioning GitLab role credentials", repoFullName))
 	result, err := repos.ProvisionGitLabRoleCredentials(ctx, repos.RoleProvisionConfig{
-		Owner:          owner,
-		Repo:           repo,
-		Client:         client,
-		Tokens:         tokens,
-		Registry:       reg,
-		DesiredMode:    mode,
-		ProvidedTokens: opts.gitlabRoleProvided,
-		DryRun:         opts.dryRun,
+		Owner:            owner,
+		Repo:             repo,
+		Client:           client,
+		Tokens:           tokens,
+		Registry:         reg,
+		RegistryProvided: opts.gitlabRoleRegistryJSON != "",
+		DesiredMode:      mode,
+		ProvidedTokens:   opts.gitlabRoleProvided,
+		DryRun:           opts.dryRun,
 	})
 	if err != nil {
 		printer.StepFail(fmt.Sprintf("[%s] GitLab role provisioning failed", repoFullName))

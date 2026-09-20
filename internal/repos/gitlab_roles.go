@@ -48,6 +48,12 @@ type RoleProvisionConfig struct {
 	Client   forge.Client
 	Tokens   ProjectAccessTokenClient
 	Registry gitlabroles.Registry
+	// RegistryProvided is true when the operator explicitly supplied
+	// --gitlab-role-registry this run, as opposed to Registry being
+	// populated from a previously stored registry variable. Used only
+	// to decide whether to surface a diagnostic when the gate is
+	// rollback/disabled and the supplied registry is not persisted.
+	RegistryProvided bool
 	// DesiredMode is written to FULLSEND_GITLAB_ROLE_MIGRATION.
 	// Empty means ModeMigrating. ModeDisabled and ModeRollback write
 	// the gate without creating or revoking tokens.
@@ -169,6 +175,10 @@ func ProvisionGitLabRoleCredentials(ctx context.Context, cfg RoleProvisionConfig
 	}
 	result.Report = gitlabroles.Diagnose(mode, present, reg)
 	result.Diagnostics = result.Report.Diagnostics
+	if skipTokens && (cfg.RegistryProvided || len(cfg.ProvidedTokens) > 0) {
+		result.Diagnostics = append(result.Diagnostics, fmt.Sprintf(
+			"--gitlab-role-registry/--gitlab-role-token input was ignored: GitLab role migration gate is %q, so role credentials are not minted or persisted", mode))
+	}
 	if secretLeak(result) != "" {
 		return RoleProvisionResult{SharedPreserved: true}, fmt.Errorf("internal error: provision result leaked a secret value")
 	}
