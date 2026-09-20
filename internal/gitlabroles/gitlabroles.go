@@ -76,15 +76,35 @@ const (
 // Sentinel errors. Callers distinguish "not registered", "not
 // provisioned", and "authentication failed" with errors.Is. Error
 // strings and the Error type carry secret *names* only, never values.
-var (
-	ErrInvalidMode        = errors.New("invalid GitLab role migration mode")
-	ErrInvalidRegistry    = errors.New("invalid GitLab role registry")
-	ErrUnknownJob         = errors.New("job has no GitLab role mapping")
-	ErrUnregistered       = errors.New("GitLab role is not registered")
-	ErrUnconfigured       = errors.New("GitLab role credential is not provisioned")
-	ErrSharedUnconfigured = errors.New("shared GitLab credential is not provisioned")
-	ErrAuthFailed         = errors.New("GitLab role credential authentication failed")
-)
+
+// ErrInvalidMode indicates FULLSEND_GITLAB_ROLE_MIGRATION holds a value
+// that is not one of the four defined modes.
+var ErrInvalidMode = errors.New("invalid GitLab role migration mode")
+
+// ErrInvalidRegistry indicates FULLSEND_GITLAB_ROLE_REGISTRY failed to
+// parse or validate as a role registry document.
+var ErrInvalidRegistry = errors.New("invalid GitLab role registry")
+
+// ErrUnknownJob indicates a Job has no name to resolve (an empty agent
+// name, or a Kind Resolve does not recognize).
+var ErrUnknownJob = errors.New("job has no GitLab role mapping")
+
+// ErrUnregistered indicates a job's agent name or harness role does not
+// match any registered role in the registry.
+var ErrUnregistered = errors.New("GitLab role is not registered")
+
+// ErrUnconfigured indicates a registered role's credential secret is
+// not yet provisioned.
+var ErrUnconfigured = errors.New("GitLab role credential is not provisioned")
+
+// ErrSharedUnconfigured indicates the shared FULLSEND_FORGE_TOKEN
+// credential is not provisioned.
+var ErrSharedUnconfigured = errors.New("shared GitLab credential is not provisioned")
+
+// ErrAuthFailed indicates a role credential already failed
+// authentication during this job; Resolve never switches identities
+// after this.
+var ErrAuthFailed = errors.New("GitLab role credential authentication failed")
 
 // Error annotates a sentinel with the role, mode, and secret name
 // involved. Secret is a CI/CD variable name, never a token value.
@@ -102,13 +122,13 @@ func (e *Error) Error() string {
 	var b strings.Builder
 	b.WriteString(e.Err.Error())
 	if e.Role != "" {
-		fmt.Fprintf(&b, ": role %s", e.Role)
+		fmt.Fprintf(&b, ": role %q", e.Role)
 	}
 	if e.Mode != "" {
-		fmt.Fprintf(&b, ": mode %s", e.Mode)
+		fmt.Fprintf(&b, ": mode %q", e.Mode)
 	}
 	if e.Secret != "" {
-		fmt.Fprintf(&b, ": %s", e.Secret)
+		fmt.Fprintf(&b, ": secret %s", e.Secret)
 	}
 	return b.String()
 }

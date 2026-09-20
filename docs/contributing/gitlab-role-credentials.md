@@ -190,8 +190,12 @@ value. Built-in aliases and custom agent names share this lookup.
 Unmapped jobs (for example `e2e` or an unregistered custom agent) keep
 working on the shared token when the gate is `disabled` or `rollback`.
 In `migrating` and `enforced` they fail closed (`ErrUnregistered`)
-rather than guessing an identity. `ValidateAgent` rejects the same
-names in every mode so routing can fail closed before `Resolve`.
+rather than guessing an identity. `ValidateAgent` itself takes no mode
+and always rejects an unmapped name, so routing (#7499) must only call
+it as a pre-check ahead of `Resolve` when the migration gate is
+`migrating` or `enforced`; calling it unconditionally ahead of the
+legacy `disabled`/`rollback` path would break existing installations
+that rely on unmapped jobs falling back to the shared token.
 
 ## Migration gate
 

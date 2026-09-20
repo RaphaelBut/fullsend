@@ -194,6 +194,9 @@ func ParseRegistry(raw string) (Registry, error) {
 	if err := dec.Decode(&file); err != nil {
 		return Registry{}, fmt.Errorf("%w: %v", ErrInvalidRegistry, err)
 	}
+	if dec.More() {
+		return Registry{}, fmt.Errorf("%w: trailing data", ErrInvalidRegistry)
+	}
 	custom := make([]Registration, 0, len(file.Roles))
 	for i, row := range file.Roles {
 		rec, err := registrationFromFile(row)
@@ -328,7 +331,29 @@ func newRegistry(custom []Registration) (Registry, error) {
 	if err := r.resolveReuse(); err != nil {
 		return Registry{}, err
 	}
+	if err := r.checkSecretNameCollisions(); err != nil {
+		return Registry{}, err
+	}
 	return r, nil
+}
+
+// checkSecretNameCollisions rejects a registry where two CredentialOwn
+// roles resolve to the same SecretName. CustomSecretName is not
+// injective (hyphens and underscores both normalize to underscore), so
+// distinct role names such as "ci-check" and "ci_check" could otherwise
+// silently share one CI/CD variable outside the explicit reuse path.
+func (r *Registry) checkSecretNameCollisions() error {
+	seen := make(map[string]Role, len(r.roles))
+	for _, rec := range r.roles {
+		if rec.Credential.Kind != CredentialOwn {
+			continue
+		}
+		if existing, ok := seen[rec.Credential.SecretName]; ok {
+			return fmt.Errorf("%w: role %q and role %q derive the same secret name %q", ErrInvalidRegistry, existing, rec.Name, rec.Credential.SecretName)
+		}
+		seen[rec.Credential.SecretName] = rec.Name
+	}
+	return nil
 }
 
 func (r *Registry) add(rec Registration) error {
@@ -337,6 +362,9 @@ func (r *Registry) add(rec Registration) error {
 	}
 	if _, exists := r.byName[rec.Name]; exists {
 		return fmt.Errorf("role %q is already registered", rec.Name)
+	}
+	if existing, ok := r.byAgent[string(rec.Name)]; ok {
+		return fmt.Errorf("role %q: name collides with agent mapping already assigned to role %q", rec.Name, existing)
 	}
 	switch rec.Credential.Kind {
 	case CredentialOwn, CredentialReuse:
@@ -403,6 +431,9 @@ func (r *Registry) resolveReuse() error {
 
 func registrationFromFile(row registryRole) (Registration, error) {
 	name := strings.TrimSpace(row.Name)
+	if looksLikeSecretValue(name) {
+		return Registration{}, fmt.Errorf("name must be a role name, not a secret value")
+	}
 	if !validRoleName(name) {
 		return Registration{}, fmt.Errorf("invalid role name %q", row.Name)
 	}
@@ -426,6 +457,10 @@ func registrationFromFile(row registryRole) (Registration, error) {
 	if secret != "" && !envNamePattern.MatchString(secret) {
 		return Registration{}, fmt.Errorf("invalid secret_name %q", secret)
 	}
+	reuse := strings.ToLower(strings.TrimSpace(row.Reuse))
+	if looksLikeSecretValue(reuse) {
+		return Registration{}, fmt.Errorf("reuse must be a role name, not a secret value")
+	}
 	rec := Registration{
 		Name:           Role(name),
 		Kind:           RoleKindCustom,
@@ -433,7 +468,7 @@ func registrationFromFile(row registryRole) (Registration, error) {
 		Credential: CredentialRef{
 			Kind:       kind,
 			SecretName: secret,
-			ReuseOf:    Role(strings.ToLower(strings.TrimSpace(row.Reuse))),
+			ReuseOf:    Role(reuse),
 		},
 		Capabilities: caps,
 		Agents:       agents,

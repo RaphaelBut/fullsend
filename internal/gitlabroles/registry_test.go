@@ -400,6 +400,58 @@ func TestCustomSecretNameHyphen(t *testing.T) {
 	assert.Equal(t, "fullsend-role-ci-check", CustomTokenName(Role("ci-check")))
 }
 
+func TestParseRegistryRejectsSecretNameCollision(t *testing.T) {
+	t.Parallel()
+	_, err := ParseRegistry(`{"roles":[
+		{"name":"ci-check","credential":"own"},
+		{"name":"ci_check","credential":"own"}
+	]}`)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRegistry)
+	assert.Contains(t, err.Error(), "FULLSEND_GITLAB_ROLE_CI_CHECK_TOKEN")
+}
+
+func TestParseRegistryRejectsTrailingData(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{
+		`{"roles":[]}{"roles":[]}`,
+		`{"roles":[]} junk`,
+	} {
+		_, err := ParseRegistry(raw)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidRegistry)
+		assert.Contains(t, err.Error(), "trailing data")
+	}
+}
+
+func TestParseRegistryRejectsNameStealingBuiltinAgentAlias(t *testing.T) {
+	t.Parallel()
+	_, err := ParseRegistry(`{"roles":[{"name":"review","credential":"own"}]}`)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRegistry)
+	assert.Contains(t, err.Error(), "collides with agent mapping")
+	reg := BuiltinRegistry()
+	rec, ok := reg.RoleFor("review")
+	require.True(t, ok)
+	assert.Equal(t, RoleAnalyst, rec.Name)
+}
+
+func TestParseRegistryRejectsSecretValueAsName(t *testing.T) {
+	t.Parallel()
+	_, err := ParseRegistry(`{"roles":[{"name":"glpat-secretvalue"}]}`)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRegistry)
+	assert.NotContains(t, err.Error(), "glpat-secretvalue")
+}
+
+func TestParseRegistryRejectsSecretValueAsReuse(t *testing.T) {
+	t.Parallel()
+	_, err := ParseRegistry(`{"roles":[{"name":"scanner","credential":"reuse","reuse":"glpat-secretvalue"}]}`)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRegistry)
+	assert.NotContains(t, err.Error(), "glpat-secretvalue")
+}
+
 func TestParseRegistryExplicitMatchingSecretName(t *testing.T) {
 	t.Parallel()
 	reg := mustParseRegistry(t, `{

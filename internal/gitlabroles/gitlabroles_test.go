@@ -393,6 +393,16 @@ func TestErrorWithoutRoleModeSecret(t *testing.T) {
 	assert.Equal(t, ErrUnknownJob.Error(), e.Error())
 }
 
+func TestErrorFormatQuotesRoleAndModeLabelsSecret(t *testing.T) {
+	t.Parallel()
+	e := &Error{Err: ErrUnconfigured, Role: RoleCoder, Mode: ModeEnforced, Secret: forge.SecretGitLabCoderToken}
+	want := ErrUnconfigured.Error() +
+		`: role "coder"` +
+		`: mode "enforced"` +
+		`: secret ` + forge.SecretGitLabCoderToken
+	assert.Equal(t, want, e.Error())
+}
+
 func TestIdentifiers(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, []Role{RolePoller, RoleAnalyst, RoleCoder}, BuiltinRoles())
