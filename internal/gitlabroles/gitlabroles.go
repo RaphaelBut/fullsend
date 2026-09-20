@@ -63,6 +63,14 @@ const DeveloperAccessLevel = 30
 // PAT stored as FULLSEND_FORGE_TOKEN.
 const SharedTokenName = "fullsend-bot"
 
+// Built-in project access token names. Custom own-credential names are
+// derived by CustomTokenName (fullsend-role-<name>).
+const (
+	PollerTokenName  = "fullsend-poller"
+	AnalystTokenName = "fullsend-analyst"
+	CoderTokenName   = "fullsend-coder"
+)
+
 // RoleState is the configured/unconfigured status of one role secret.
 // Presence is boolean; this contract does not inspect expiry or
 // authorization (those belong to #7500).

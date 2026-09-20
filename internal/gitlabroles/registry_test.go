@@ -492,6 +492,14 @@ func TestParseRegistryRejectsSecretValueAsAgent(t *testing.T) {
 	assert.NotContains(t, err.Error(), "glpat-secretvalue")
 }
 
+func TestParseRegistryRejectsSecretValueAsResponsibility(t *testing.T) {
+	t.Parallel()
+	_, err := ParseRegistry(`{"roles":[{"name":"scanner","responsibility":"glpat-secretvalue"}]}`)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidRegistry)
+	assert.NotContains(t, err.Error(), "glpat-secretvalue")
+}
+
 func TestParseRegistryExplicitMatchingSecretName(t *testing.T) {
 	t.Parallel()
 	reg := mustParseRegistry(t, `{
@@ -637,4 +645,73 @@ func TestLoadRegistryEmpty(t *testing.T) {
 	reg, err := LoadRegistry(func(string) string { return "" })
 	require.NoError(t, err)
 	assert.Len(t, reg.Registrations(), 3)
+}
+
+func TestMarshalCustomRolesRoundTrip(t *testing.T) {
+	t.Parallel()
+	raw := `{
+		"roles": [
+			{
+				"name": "scanner",
+				"responsibility": "read-only scanning",
+				"credential": "own",
+				"capabilities": ["read_issues", "write_notes"],
+				"agents": ["scanner"]
+			},
+			{
+				"name": "deployer",
+				"credential": "reuse",
+				"reuse": "coder",
+				"capabilities": ["write_repository", "write_merge_request"],
+				"agents": ["deploy"]
+			}
+		]
+	}`
+	reg := mustParseRegistry(t, raw)
+	got, err := MarshalCustomRoles(reg)
+	require.NoError(t, err)
+	assert.NotContains(t, got, "glpat-")
+	assert.NotContains(t, got, forge.SecretGitLabCoderToken)
+
+	round, err := ParseRegistry(got)
+	require.NoError(t, err)
+	scanner, ok := round.Lookup(Role("scanner"))
+	require.True(t, ok)
+	assert.Equal(t, RoleKindCustom, scanner.Kind)
+	assert.Equal(t, CredentialOwn, scanner.Credential.Kind)
+	assert.Equal(t, CustomSecretName(Role("scanner")), scanner.Credential.SecretName)
+	deployer, ok := round.Lookup(Role("deployer"))
+	require.True(t, ok)
+	assert.Equal(t, CredentialReuse, deployer.Credential.Kind)
+	assert.Equal(t, RoleCoder, deployer.Credential.ReuseOf)
+	assert.Equal(t, forge.SecretGitLabCoderToken, deployer.Credential.SecretName)
+}
+
+func TestMarshalCustomRolesBuiltinsOnly(t *testing.T) {
+	t.Parallel()
+	got, err := MarshalCustomRoles(BuiltinRegistry())
+	require.NoError(t, err)
+	assert.Equal(t, `{"roles":[]}`, got)
+	reg, err := ParseRegistry(got)
+	require.NoError(t, err)
+	assert.Equal(t, BuiltinRoles(), roleNames(reg))
+}
+
+func TestIsRoleProjectTokenName(t *testing.T) {
+	t.Parallel()
+	assert.True(t, IsRoleProjectTokenName(PollerTokenName))
+	assert.True(t, IsRoleProjectTokenName(AnalystTokenName))
+	assert.True(t, IsRoleProjectTokenName(CoderTokenName))
+	assert.True(t, IsRoleProjectTokenName(CustomTokenName(Role("scanner"))))
+	assert.False(t, IsRoleProjectTokenName(SharedTokenName))
+	assert.False(t, IsRoleProjectTokenName("other-token"))
+	assert.False(t, IsRoleProjectTokenName(""))
+}
+
+func roleNames(reg Registry) []Role {
+	out := make([]Role, 0, 3)
+	for _, rec := range reg.Registrations() {
+		out = append(out, rec.Name)
+	}
+	return out
 }
