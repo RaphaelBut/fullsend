@@ -29,15 +29,20 @@ func canMaskGitLabValue(value string) bool {
 // present only at creation time; it must never appear in logs, status,
 // or Error strings.
 type ProjectAccessToken struct {
-	ID    int
-	Name  string
-	Token string
+	ID        int
+	Name      string
+	Token     string
+	Active    bool
+	ExpiresAt string
+	Revoked   bool
 }
 
-// ProjectAccessTokenClient creates and revokes GitLab project access
-// tokens. Implementations must not log token values.
+// ProjectAccessTokenClient creates, lists, and revokes GitLab project
+// access tokens. Implementations must not log token values. List results
+// typically omit Token (GitLab returns the secret only at creation).
 type ProjectAccessTokenClient interface {
 	CreateProjectAccessToken(ctx context.Context, owner, repo, name string, scopes []string, accessLevel int, expiresAt string) (*ProjectAccessToken, error)
+	ListProjectAccessTokens(ctx context.Context, owner, repo string) ([]ProjectAccessToken, error)
 	RevokeProjectAccessToken(ctx context.Context, owner, repo string, tokenID int) error
 }
 
@@ -104,6 +109,7 @@ func GitLabPATExpiresAt(now time.Time) string {
 func IsGitLabRoleManagedVar(name string) bool {
 	switch name {
 	case forge.VarGitLabRoleMigration, forge.VarGitLabRoleRegistry,
+		forge.VarGitLabRoleRotation,
 		forge.SecretGitLabPollerToken, forge.SecretGitLabAnalystToken,
 		forge.SecretGitLabCoderToken:
 		return true
@@ -117,6 +123,7 @@ func IsGitLabRoleManagedVar(name string) bool {
 var gitLabRoleUninstallVars = []string{
 	forge.VarGitLabRoleMigration,
 	forge.VarGitLabRoleRegistry,
+	forge.VarGitLabRoleRotation,
 	forge.SecretGitLabPollerToken,
 	forge.SecretGitLabAnalystToken,
 	forge.SecretGitLabCoderToken,
@@ -224,6 +231,9 @@ func provisionOwnRoles(ctx context.Context, cfg RoleProvisionConfig, reg gitlabr
 		secret := rec.Credential.SecretName
 		if present[secret] {
 			result.Skipped = append(result.Skipped, rec.Name)
+			if !cfg.DryRun {
+				backfillInitialDistributionProof(ctx, cfg, rec, now, result)
+			}
 			continue
 		}
 		if provided := strings.TrimSpace(cfg.ProvidedTokens[rec.Name]); provided != "" {
@@ -249,6 +259,19 @@ func provisionOwnRoles(ctx context.Context, cfg RoleProvisionConfig, reg gitlabr
 			}
 			present[secret] = true
 			result.Enrolled = append(result.Enrolled, rec.Name)
+			// Record rotation-state proof of this administrator-provided
+			// enrollment, mirroring the freshly-minted-PAT path below, so
+			// a later RotateGitLabRoleCredentials run does not treat this
+			// healthy provided credential as an unproven orphan and
+			// immediately re-mint a replacement for it. There is no
+			// GitLab token ID to record here (only the secret value was
+			// supplied); tokenID=0 with phase=idle and DistributedAt set
+			// is the same not-due proof rotateProvided records for a
+			// later administrator-provided replacement.
+			if err := recordInitialDistribution(ctx, cfg.Client, cfg.Owner, cfg.Repo, rec.Name, 0, "", now); err != nil {
+				result.Diagnostics = append(result.Diagnostics, fmt.Sprintf(
+					"%s: recording rotation-state distribution proof failed; a future rotation run will treat this credential as unproven and replace it", rec.Name))
+			}
 			continue
 		}
 		if cfg.DryRun {
@@ -301,6 +324,14 @@ func provisionOwnRoles(ctx context.Context, cfg RoleProvisionConfig, reg gitlabr
 		}
 		present[secret] = true
 		result.Created = append(result.Created, rec.Name)
+		// Record rotation-state proof of this initial distribution so a
+		// later RotateGitLabRoleCredentials run does not treat this
+		// healthy, just-provisioned PAT as an unproven orphan and
+		// immediately mint a replacement for it.
+		if err := recordInitialDistribution(ctx, cfg.Client, cfg.Owner, cfg.Repo, rec.Name, tok.ID, expiresAt, now); err != nil {
+			result.Diagnostics = append(result.Diagnostics, fmt.Sprintf(
+				"%s: recording rotation-state distribution proof failed; a future rotation run will treat this credential as unproven and replace it", rec.Name))
+		}
 	}
 }
 

@@ -928,3 +928,132 @@ func TestCleanupGitLabRoleTokens(t *testing.T) {
 		assert.Contains(t, buf.String(), "Could not list project access tokens")
 	})
 }
+
+func TestPrepareGitLabRoleFlagsRotateNames(t *testing.T) {
+	opts := &reposInstallConfig{rotateGitLabRoleNames: []string{"Poller", " scanner "}}
+	require.NoError(t, prepareGitLabRoleFlags(opts))
+	assert.Equal(t, []gitlabroles.Role{gitlabroles.RolePoller, gitlabroles.Role("scanner")}, opts.rotateGitLabRoleFilter)
+
+	err := prepareGitLabRoleFlags(&reposInstallConfig{rotateGitLabRoleNames: []string{" "}})
+	require.Error(t, err)
+}
+
+func TestMaybeRotateGitLabRoles_SkipDisabled(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.VariableValues = map[string]string{"group/project/" + forge.VarGitLabRoleMigration: "disabled"}
+	fake.VariablesExist = map[string]bool{"group/project/" + forge.VarGitLabRoleMigration: true}
+	var buf bytes.Buffer
+	require.NoError(t, maybeRotateGitLabRoles(ctx, &reposInstallConfig{}, fake, ui.New(&buf), "group", "project"))
+	assert.NotContains(t, buf.String(), "Rotating GitLab role credentials")
+}
+
+func TestMaybeRotateGitLabRoles_MigratingWithoutTokenClient(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.VariableValues = map[string]string{"group/project/" + forge.VarGitLabRoleMigration: "migrating"}
+	fake.VariablesExist = map[string]bool{"group/project/" + forge.VarGitLabRoleMigration: true}
+	var buf bytes.Buffer
+	require.NoError(t, maybeRotateGitLabRoles(ctx, &reposInstallConfig{}, fake, ui.New(&buf), "group", "project"))
+	out := buf.String()
+	assert.Contains(t, out, "Rotating GitLab role credentials")
+	assert.Contains(t, out, "no GitLab token client")
+	assert.NotContains(t, out, "glpat-")
+}
+
+func TestPrintGitLabRoleRotateCoversBranches(t *testing.T) {
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	printGitLabRoleRotate(printer, "g/p", repos.RoleRotateResult{
+		Rotated:     []gitlabroles.Role{gitlabroles.RolePoller},
+		Skipped:     []gitlabroles.Role{gitlabroles.RoleAnalyst},
+		Reused:      []gitlabroles.Role{gitlabroles.Role("deployer")},
+		Overlapping: []gitlabroles.Role{gitlabroles.RolePoller},
+		Cleaned:     []gitlabroles.Role{gitlabroles.RoleCoder},
+		RolledBack:  []gitlabroles.Role{gitlabroles.Role("scanner")},
+		InProgress:  []gitlabroles.Role{gitlabroles.Role("other")},
+		Failed: []repos.RoleProvisionFailure{{
+			Role: gitlabroles.RolePoller, Secret: forge.SecretGitLabPollerToken,
+			Reason: "storing replacement credential failed",
+		}},
+		Diagnostics: []string{"mode=migrating"},
+		DryRun:      true,
+	})
+	out := buf.String()
+	assert.Contains(t, out, "Would rotate poller")
+	assert.Contains(t, out, "not due")
+	assert.Contains(t, out, "reuses another")
+	assert.Contains(t, out, "in-flight")
+	assert.Contains(t, out, "grace period")
+	assert.Contains(t, out, "rolled back")
+	assert.Contains(t, out, "already in progress")
+	assert.Contains(t, out, "rotation pending")
+	assert.NotContains(t, out, "glpat-")
+}
+
+func TestAnnotateGitLabRoleLifecycleSkipsNonLiveClient(t *testing.T) {
+	result := &repos.StatusResult{Repos: []repos.RepoStatus{{
+		Owner: "group", Repo: "project", GitLabRoleMode: "migrating",
+		GitLabRoleDiagnostics: []string{"mode=migrating"},
+	}}}
+	annotateGitLabRoleLifecycle(context.Background(), nil, result)
+	assert.Equal(t, "migrating", result.Repos[0].GitLabRoleMode)
+}
+
+func TestAnnotateGitLabRoleLifecycleDoesNotDoubleCountDrifted(t *testing.T) {
+	ctx := context.Background()
+	registryJSON := `{"roles":[{"name":"scanner","credential":"own","capabilities":["read_issues"],"agents":["scanner"]}]}`
+	scannerSecret := gitlabroles.CustomSecretName(gitlabroles.Role("scanner"))
+	scannerToken := gitlabroles.CustomTokenName(gitlabroles.Role("scanner"))
+
+	mux := http.NewServeMux()
+	serveVariable := func(project, name, value string) {
+		mux.HandleFunc(fmt.Sprintf("/api/v4/projects/%s/variables/%s", project, name), func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"value": value})
+		})
+	}
+	for _, project := range []string{"group%2Fproject-a", "group%2Fproject-b"} {
+		serveVariable(project, forge.VarGitLabRoleMigration, "enforced")
+		serveVariable(project, forge.VarGitLabRoleRegistry, registryJSON)
+		serveVariable(project, forge.SecretForgeToken, "present")
+		serveVariable(project, scannerSecret, "present")
+		project := project
+		mux.HandleFunc(fmt.Sprintf("/api/v4/projects/%s/access_tokens", project), func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]map[string]any{
+				{"id": 1, "name": scannerToken, "active": false},
+			})
+		})
+	}
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
+	require.NoError(t, err)
+	clients := newSingleClientFactory(glClient)
+
+	t.Run("repo already counted as drifted is not double-counted", func(t *testing.T) {
+		result := &repos.StatusResult{
+			Repos: []repos.RepoStatus{{
+				Owner: "group", Repo: "project-a", GitLabRoleMode: "enforced",
+				Drifts: []repos.Drift{{Field: "current_ref", Expected: "a", Actual: "b"}},
+			}},
+			Summary: repos.StatusSummary{Drifted: 1},
+		}
+		annotateGitLabRoleLifecycle(ctx, clients, result)
+		require.Len(t, result.Repos[0].Drifts, 2, "the lifecycle drift must still be recorded")
+		assert.Equal(t, 1, result.Summary.Drifted, "already-drifted repo must not be counted twice")
+	})
+
+	t.Run("repo with no prior drift is counted once on the new drift", func(t *testing.T) {
+		result := &repos.StatusResult{
+			Repos: []repos.RepoStatus{{
+				Owner: "group", Repo: "project-b", GitLabRoleMode: "enforced",
+			}},
+			Summary: repos.StatusSummary{Drifted: 0},
+		}
+		annotateGitLabRoleLifecycle(ctx, clients, result)
+		require.Len(t, result.Repos[0].Drifts, 1)
+		assert.Equal(t, 1, result.Summary.Drifted, "no-drift to drift transition must be counted exactly once")
+	})
+}
