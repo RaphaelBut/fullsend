@@ -16,8 +16,8 @@ import (
 // reports it.
 type ComponentStatus struct {
 	// Name identifies the component, prefixed by category:
-	//   "workflow", "thin-caller:<path>", "var:<name>", "secret:<name>",
-	//   "schedule:<name>"
+	//   "workflow", "thin-caller:<path>", "scaffold:<path>", "var:<name>",
+	//   "secret:<name>", "schedule:<name>"
 	Name string
 
 	// Present is true when the component exists on the forge.
