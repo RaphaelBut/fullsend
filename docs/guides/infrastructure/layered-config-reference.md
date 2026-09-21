@@ -41,9 +41,9 @@ the preset alone; CLI flags override the same keys without rewriting the
 preset file.
 
 `fullsend repos install` uses the same preset implementation. Declare a
-default source in `defaults.config` (optional `defaults.config_hash`) or
-override it per repository with `config` / `config_hash`. The `none`
-sentinel disables inheritance. Convergence writes the fetched bytes to
+default source in `defaults.config_base.source` (optional
+`defaults.config_base.sha256`) or override it per repository with
+`config_base`. The `none` sentinel disables inheritance. Convergence writes the fetched bytes to
 `config.base.yaml` and never edits the overlay; `repos status` reports
 base-file drift only when a preset is declared. See
 [Repo Management — Configuration presets](../getting-started/repo-management.md#configuration-presets).

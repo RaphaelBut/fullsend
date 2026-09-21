@@ -4108,7 +4108,7 @@ func TestConverge_PresetFreshInstallWritesBaseAndOverlay(t *testing.T) {
 	repoNames := []string{"acme/api"}
 	fc := newFakeClientForBatch(repoNames...)
 	m := newConvergeManifest(repoNames...)
-	m.Defaults.Config = presetPath
+	m.Defaults.ConfigBase.Source = presetPath
 
 	sc := &spyScaffoldCommit{}
 	cfg := convergeCfgWithDefaults(m)
@@ -4171,7 +4171,7 @@ func TestConverge_PresetFreshInstallExplicitRolesWritesOverlay(t *testing.T) {
 	repoNames := []string{"acme/api"}
 	fc := newFakeClientForBatch(repoNames...)
 	m := newConvergeManifest(repoNames...)
-	m.Defaults.Config = presetPath
+	m.Defaults.ConfigBase.Source = presetPath
 
 	sc := &spyScaffoldCommit{}
 	cfg := convergeCfgWithDefaults(m)
@@ -4221,7 +4221,7 @@ func TestConverge_PresetIdempotentWhenUnchanged(t *testing.T) {
 
 	overlayBefore := fc.FileContents["acme/api/.fullsend/config.yaml"]
 	m := newConvergeManifest(repoNames...)
-	m.Defaults.Config = presetPath
+	m.Defaults.ConfigBase.Source = presetPath
 
 	committed := false
 	commitFn := func(_ context.Context, _, _ string, files []forge.TreeFile, _ bool, _ bool) error {
@@ -4261,7 +4261,7 @@ func TestConverge_PresetChangeReplacesBasePreservesOverlay(t *testing.T) {
 	fc.FileContents["acme/api/.fullsend/config.yaml"] = overlay
 
 	m := newConvergeManifest(repoNames...)
-	m.Defaults.Config = presetPath
+	m.Defaults.ConfigBase.Source = presetPath
 
 	var committedFiles []forge.TreeFile
 	commitFn := func(_ context.Context, _, _ string, files []forge.TreeFile, _ bool, _ bool) error {
@@ -4309,8 +4309,8 @@ func TestConverge_PresetHashMismatchFailsBeforeApply(t *testing.T) {
 	populateScaffoldContent(t, fc, "acme", "api", "v1.0.0", "https://mint.example.com")
 
 	m := newConvergeManifest(repoNames...)
-	m.Defaults.Config = presetPath
-	m.Defaults.ConfigHash = strings.Repeat("0", 64)
+	m.Defaults.ConfigBase.Source = presetPath
+	m.Defaults.ConfigBase.SHA256 = strings.Repeat("0", 64)
 
 	committed := false
 	commitFn := func(_ context.Context, _, _ string, _ []forge.TreeFile, _ bool, _ bool) error {
@@ -4341,7 +4341,7 @@ func TestConverge_PresetInvalidSourceFailsBeforeApply(t *testing.T) {
 	populateScaffoldContent(t, fc, "acme", "api", "v1.0.0", "https://mint.example.com")
 
 	m := newConvergeManifest(repoNames...)
-	m.Defaults.Config = "/nonexistent/preset.yaml"
+	m.Defaults.ConfigBase.Source = "/nonexistent/preset.yaml"
 
 	committed := false
 	commitFn := func(_ context.Context, _, _ string, _ []forge.TreeFile, _ bool, _ bool) error {
@@ -4401,7 +4401,7 @@ func TestConverge_GitLab_PresetChangeReplacesBase(t *testing.T) {
 	fc.FileContents["acme/api/.fullsend/config.yaml"] = overlay
 
 	cfg := gitlabConvergeCfg("acme/api")
-	cfg.Manifest.Defaults.Config = presetPath
+	cfg.Manifest.Defaults.ConfigBase.Source = presetPath
 
 	var committedFiles []forge.TreeFile
 	commitFn := func(_ context.Context, _, _ string, files []forge.TreeFile, _ bool, _ bool) error {
@@ -4441,7 +4441,7 @@ func TestConverge_GitLab_PresetFreshInstallWritesBase(t *testing.T) {
 	presetPath := writePresetFile(t, testPresetYAML)
 	fc := newFakeClientForBatch("acme/api")
 	cfg := gitlabConvergeCfg("acme/api")
-	cfg.Manifest.Defaults.Config = presetPath
+	cfg.Manifest.Defaults.ConfigBase.Source = presetPath
 
 	sc := &spyScaffoldCommit{}
 	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), sc.fn(), noopProgress)
@@ -4477,7 +4477,7 @@ func TestConverge_FreshInstallDryRunReportsPreset(t *testing.T) {
 	repoNames := []string{"acme/api"}
 	fc := newFakeClientForBatch(repoNames...)
 	m := newConvergeManifest(repoNames...)
-	m.Defaults.Config = presetPath
+	m.Defaults.ConfigBase.Source = presetPath
 	cfg := convergeCfgWithDefaults(m)
 	cfg.DryRun = true
 
@@ -4530,7 +4530,7 @@ func TestConverge_PresetDryRunDoesNotCommit(t *testing.T) {
 	fc.FileContents["acme/api/.fullsend/config.base.yaml"] = []byte("version: \"1\"\nruntime: pi\n")
 
 	m := newConvergeManifest(repoNames...)
-	m.Defaults.Config = presetPath
+	m.Defaults.ConfigBase.Source = presetPath
 	cfg := convergeCfgWithDefaults(m)
 	cfg.DryRun = true
 
@@ -4574,14 +4574,14 @@ func TestConverge_PerRepoPresetOverrideAndDisable(t *testing.T) {
 
 	m := &Manifest{
 		Version:  1,
-		Defaults: DefaultsConfig{Config: defaultPath},
+		Defaults: DefaultsConfig{ConfigBase: ConfigBase{Source: defaultPath}},
 		GitHub: &PlatformConfig{
 			MintURL:     "https://mint.example.com",
 			FullsendRef: "v1.0.0",
 			Repos: []RepoEntry{
 				{Name: "acme/inherit"},
-				{Name: "acme/override", Config: overridePath},
-				{Name: "acme/disabled", Config: NoneSentinel},
+				{Name: "acme/override", ConfigBase: ConfigBase{Source: overridePath}},
+				{Name: "acme/disabled", ConfigBase: ConfigBase{Source: NoneSentinel}},
 			},
 		},
 	}

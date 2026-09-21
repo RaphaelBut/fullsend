@@ -35,7 +35,7 @@ fullsend github setup <owner/repo> \
   --config-hash "<sha256-hex>"
 ```
 
-See [Configuring GitHub — Using a vendor preset](../getting-started/configuring-github.md#using-a-vendor-preset) for details. Fleet installs declare the same source in `repos.yaml` (`defaults.config` / per-repo `config`) and converge it with `fullsend repos install`; see [Repo Management — Configuration presets](../getting-started/repo-management.md#configuration-presets).
+See [Configuring GitHub — Using a vendor preset](../getting-started/configuring-github.md#using-a-vendor-preset) for details. Fleet installs declare the same source in `repos.yaml` (`defaults.config_base` / per-repo `config_base`) and converge it with `fullsend repos install`; see [Repo Management — Configuration presets](../getting-started/repo-management.md#configuration-presets).
 
 If you have IAM access to the platform operator's GCP project, pass `--mint-project` and `--mint-region` to `admin install` to enable auto-discovery of shared app IDs and automatic validation of mint configuration. This requires `roles/cloudfunctions.developer` on the platform mint project.
 
