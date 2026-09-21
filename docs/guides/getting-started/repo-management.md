@@ -120,7 +120,7 @@ github:
 ```
 
 The `none` sentinel works for string fields (`fullsend_ref`,
-`mint_url`, `mint_mode`, `config`, `config_hash`). List fields like
+`mint_url`, `mint_mode`, `config_base.source`, `config_base.sha256`). List fields like
 `allowed_remote_resources` are managed at the `defaults` level and
 cannot be cleared per-repo.
 
@@ -135,29 +135,32 @@ merged with the preset.
 ```yaml
 version: 1
 defaults:
-  config: https://example.com/presets/org.yaml
-  config_hash: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  config_base:
+    source: https://example.com/presets/org.yaml
+    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 github:
   repos:
     - name: acme/api          # inherits the fleet preset
     - name: acme/special
-      config: ./special.yaml  # per-repo override (path is relative to repos.yaml's directory)
-      config_hash: none       # do not apply the fleet hash to this source
+      config_base:
+        source: ./special.yaml  # per-repo override (path is relative to repos.yaml's directory)
+        sha256: none            # do not apply the fleet hash to this source
     - name: acme/legacy
-      config: none            # disable inheritance; existing base is preserved
+      config_base:
+        source: none            # disable inheritance; existing base is preserved
 ```
 
-`config_hash` is optional. When set, it must be a 64-character SHA-256
+`config_base.sha256` is optional. When set, it must be a 64-character SHA-256
 hex digest of the fetched content, matching `github setup --config-hash`.
-A per-repo `config` override still inherits `defaults.config_hash` unless
-you set `config_hash` on that entry (`none` skips validation). A hash
-mismatch or invalid source fails before any files are written. Remote
-presets without a hash are accepted, but content integrity is not
-verified. Local preset paths are resolved relative to the directory
-containing `repos.yaml`, not the process working directory, and must
-stay within that directory (`../` paths that escape it are rejected).
-A manifest loaded from an HTTPS URL must declare preset sources as
-HTTPS URLs; local preset paths are not allowed in that case.
+A per-repo `config_base.source` override still inherits
+`defaults.config_base.sha256` unless you set `config_base.sha256` on that
+entry (`none` skips validation). A hash mismatch or invalid source fails
+before any files are written. Remote presets without a hash are accepted,
+but content integrity is not verified. Local preset paths are resolved
+relative to the directory containing `repos.yaml`, not the process working
+directory, and must stay within that directory (`../` paths that escape it
+are rejected). A manifest loaded from an HTTPS URL must declare preset
+sources as HTTPS URLs; local preset paths are not allowed in that case.
 
 Changing the declared preset replaces the complete base file. Repeated
 installs are idempotent when the desired bytes already match. If no
@@ -429,6 +432,24 @@ Common causes:
   manifest schema (such as the legacy `mint:` key) are rejected.
 - **Wrong nesting level** — e.g., placing `fullsend_ref` under `defaults`
   instead of under `github` or `gitlab`.
+- **Renamed fields** — the old flat `config` / `config_hash` preset keys
+  were replaced by a nested `config_base` object. Rewrite `config:` as
+  `config_base: {source: <value>}` and `config_hash:` as
+  `config_base: {sha256: <value>}`, for both `defaults` and per-repo
+  entries:
+
+  ```yaml
+  # Before
+  defaults:
+    config: presets/base.yaml
+    config_hash: <sha256>
+
+  # After
+  defaults:
+    config_base:
+      source: presets/base.yaml
+      sha256: <sha256>
+  ```
 
 To fix, correct the field name or remove the unrecognized entry and re-run
 the command.

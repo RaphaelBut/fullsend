@@ -513,7 +513,7 @@ func Converge(ctx context.Context, cfg ConvergeConfig,
 			d.preset = data
 			if shouldWarnRemotePreset(d.resolved.Config, d.resolved.ConfigHash, warnedRemote) {
 				progress(d.repo.Owner+"/"+d.repo.Repo, "preset",
-					"Remote preset fetched without config_hash; content integrity is not verified")
+					"Remote preset fetched without config_base.sha256; content integrity is not verified")
 			}
 		}
 
