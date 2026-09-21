@@ -875,6 +875,15 @@ func tokensNamed(listed []ProjectAccessToken, name string) []ProjectAccessToken 
 	return out
 }
 
+// currentListed picks the "current" active PAT out of the tokens
+// matching a role's token name, mirroring currentToken in lifecycle.go
+// (../gitlabroles/lifecycle.go) so distributionProven compares
+// IncomingID against a stable selection: the active, non-revoked token
+// with the latest parseable expiry, falling back to the highest ID when
+// no expiry parses. A dated winner is never displaced by an unparseable
+// expiry, and equal expiries (as GitLab assigns per calendar day) break
+// ties on the higher token ID so a same-day replacement is recognized
+// as current rather than whichever token happens to be listed first.
 func currentListed(matches []ProjectAccessToken) ProjectAccessToken {
 	var best ProjectAccessToken
 	var bestExp time.Time
@@ -885,12 +894,14 @@ func currentListed(matches []ProjectAccessToken) ProjectAccessToken {
 		}
 		exp, err := time.Parse("2006-01-02", strings.TrimSpace(tok.ExpiresAt))
 		if err != nil {
-			if best.ID == 0 || tok.ID > best.ID {
+			// Never let an unparseable expiry displace a winner that
+			// already has a valid parsed expiry.
+			if !bestHas && (best.ID == 0 || tok.ID > best.ID) {
 				best = tok
 			}
 			continue
 		}
-		if !bestHas || exp.After(bestExp) {
+		if !bestHas || exp.After(bestExp) || (exp.Equal(bestExp) && tok.ID > best.ID) {
 			best, bestExp, bestHas = tok, exp, true
 		}
 	}

@@ -1033,6 +1033,89 @@ func TestRotateGitLabRoleCredentials_SingleUnprovenOrphanIsNotTrustedAsDue(t *te
 	assert.Contains(t, raw, "\"outgoing_ids\":[9]", "the orphan must be tracked for grace cleanup")
 }
 
+// TestCurrentListed_SameDayExpiryTieBreaksOnHigherID guards the
+// distributionProven selector directly: currentListed must not pick
+// whichever same-day-expiry token happens to be listed first. GitLab
+// assigns PAT expiries per calendar day, so a same-day force-rotate (or
+// recovery mint) can leave two active same-named PATs with identical
+// ExpiresAt. The newer replacement always has the higher ID, so ties
+// must resolve to the higher ID rather than list order.
+func TestCurrentListed_SameDayExpiryTieBreaksOnHigherID(t *testing.T) {
+	t.Parallel()
+	older := ProjectAccessToken{ID: 5, Name: gitlabroles.PollerTokenName, Active: true, ExpiresAt: "2027-09-21"}
+	newer := ProjectAccessToken{ID: 8, Name: gitlabroles.PollerTokenName, Active: true, ExpiresAt: "2027-09-21"}
+
+	got := currentListed([]ProjectAccessToken{older, newer})
+	assert.Equal(t, newer.ID, got.ID, "the higher-ID same-day token must win regardless of list order")
+
+	got = currentListed([]ProjectAccessToken{newer, older})
+	assert.Equal(t, newer.ID, got.ID, "the higher-ID same-day token must win regardless of list order")
+}
+
+// TestCurrentListed_UnparseableExpiryNeverDisplacesParsedWinner guards the
+// other half of the same bug: a dated winner must never be overwritten by
+// a token whose ExpiresAt failed to parse, no matter its ID. Before the
+// fix, the unparseable branch compared only IDs (`best.ID == 0 ||
+// tok.ID > best.ID`) without checking whether a valid dated winner was
+// already found, so an empty/unparseable expires_at could steal
+// "current" from the real latest-expiry PAT. Among tokens that all have
+// unparseable expiries, the highest ID still wins, matching currentToken
+// in lifecycle.go.
+func TestCurrentListed_UnparseableExpiryNeverDisplacesParsedWinner(t *testing.T) {
+	t.Parallel()
+	dated := ProjectAccessToken{ID: 5, Name: gitlabroles.PollerTokenName, Active: true, ExpiresAt: "2027-09-21"}
+	undated := ProjectAccessToken{ID: 99, Name: gitlabroles.PollerTokenName, Active: true, ExpiresAt: ""}
+
+	got := currentListed([]ProjectAccessToken{dated, undated})
+	assert.Equal(t, dated.ID, got.ID, "a higher-ID unparseable expiry must not steal current from a valid dated winner")
+
+	got = currentListed([]ProjectAccessToken{undated, dated})
+	assert.Equal(t, dated.ID, got.ID, "a dated winner arriving after an unparseable token must still win")
+
+	lowerUndated := ProjectAccessToken{ID: 3, Name: gitlabroles.PollerTokenName, Active: true, ExpiresAt: ""}
+	got = currentListed([]ProjectAccessToken{lowerUndated, undated})
+	assert.Equal(t, undated.ID, got.ID, "among only-unparseable tokens, the highest ID still wins")
+}
+
+// TestRotateGitLabRoleCredentials_SameDayReplacementIsRecognizedAsCurrent
+// covers the same bug at the RotateGitLabRoleCredentials level: two
+// active same-named PATs share an ExpiresAt (GitLab assigns expiry per
+// calendar day), the older token is listed first, and rotation state
+// already records the newer token's ID as the proven distribution. A
+// buggy currentListed would pick the older, first-listed token, make
+// distributionProven false, and mint an unnecessary replacement on the
+// next non-Force run even though the newer token is a healthy,
+// already-distributed credential.
+func TestRotateGitLabRoleCredentials_SameDayReplacementIsRecognizedAsCurrent(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	fc := seededRoleClient(t, gitlabroles.RolePoller)
+	tokens := &fakeTokens{}
+	// Older token listed first; newer (higher ID) replacement shares the
+	// same calendar-day expiry and is the one rotation state proves was
+	// distributed.
+	tokens.seed(ProjectAccessToken{ID: 5, Name: gitlabroles.PollerTokenName, Active: true, ExpiresAt: "2027-09-21"})
+	tokens.seed(ProjectAccessToken{ID: 8, Name: gitlabroles.PollerTokenName, Active: true, ExpiresAt: "2027-09-21"})
+	require.NoError(t, fc.UpdateCIVariable(context.Background(), "group", "project", forge.VarGitLabRoleRotation,
+		`{"roles":{"poller":{"phase":"idle","incoming_id":8,"outgoing_ids":[],"distributed_at":"2026-06-01T00:00:00Z"}}}`, true))
+
+	result, err := RotateGitLabRoleCredentials(context.Background(), RoleRotateConfig{
+		Owner:    "group",
+		Repo:     "project",
+		Client:   fc,
+		Tokens:   tokens,
+		Registry: gitlabroles.BuiltinRegistry(),
+		Mode:     gitlabroles.ModeMigrating,
+		Roles:    []gitlabroles.Role{gitlabroles.RolePoller},
+		Now:      now,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, result.Skipped, gitlabroles.RolePoller,
+		"a proven same-day replacement must be recognized as current rather than reminted")
+	assert.NotContains(t, result.Rotated, gitlabroles.RolePoller)
+	assert.Empty(t, tokens.created, "no replacement should be minted for an already-proven, healthy credential")
+}
+
 // TestMergeRoleState_FailsClosedOnReadError guards against mergeRoleState
 // silently falling back to writing whatever *state the caller passed in
 // when the re-read that is supposed to merge against the latest document
