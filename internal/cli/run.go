@@ -531,6 +531,11 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 		return fmt.Errorf("resolving fullsend dir: %w", err)
 	}
 
+	outputBase, err = resolveOutputBase(outputBase)
+	if err != nil {
+		return err
+	}
+
 	// 1. Resolve and load harness.
 	harnessStart := time.Now()
 
@@ -1544,9 +1549,7 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 	workItemID := resolveWorkItemID()
 
 	// 3. Create run directory and initialise tracer.
-	if outputBase == "" {
-		outputBase = filepath.Join(os.TempDir(), "fullsend")
-	}
+	// outputBase is already absolute (resolveOutputBase above).
 	runDir := filepath.Join(outputBase, sandboxName)
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return fmt.Errorf("creating run directory: %w", err)
@@ -1851,12 +1854,14 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 			postRepoDir, postValidatedIterDir := postScriptRepoEnv(h, runDir, hostRepositoryDownloadDir, repoExtractedOK, validatedIterNum)
 			postCmd.Env = append(postCmd.Env, fmt.Sprintf("REPO_DIR=%s", postRepoDir))
 			// FULLSEND_VALIDATED_ITERATION_DIR tells the post-script which
-			// iteration's output was validated. Without this, post-scripts
-			// that scan for the last iteration-*/output would pick up
-			// unvalidated output when the sweep validated an earlier
-			// iteration. Empty when no validation loop is configured or
-			// when no iteration passed validation (the post-script is
-			// skipped in the latter case, so this is defensive).
+			// iteration's output was validated. The path is always absolute
+			// (runDir is resolved via resolveOutputBase) so the post-script
+			// can open it regardless of its working directory (#7522).
+			// Without this, post-scripts that scan for the last
+			// iteration-*/output would pick up unvalidated output when the
+			// sweep validated an earlier iteration. Empty when no validation
+			// loop is configured or when no iteration passed validation (the
+			// post-script is skipped in the latter case, so this is defensive).
 			if postValidatedIterDir != "" {
 				postCmd.Env = append(postCmd.Env, fmt.Sprintf("FULLSEND_VALIDATED_ITERATION_DIR=%s", postValidatedIterDir))
 			}
@@ -3464,11 +3469,12 @@ func writeValidationFeedback(iterDir string, valOut []byte, valErr error, runner
 //
 // repoDir is hostRepositoryDownloadDir when repoExtractedOK is true, empty
 // otherwise — see the call site's doc comment for why repoExtractedOK can be
-// false. validatedIterDir points at the validated iteration's output
-// directory when a validation loop is configured and an iteration passed;
-// it is empty when there's no validation loop (the post-script's own
-// last-iteration scan is used instead) or when no iteration passed (the
-// post-script is skipped entirely in that case, so this is defensive).
+// false. validatedIterDir is the absolute path of the validated iteration's
+// output directory when a validation loop is configured and an iteration
+// passed (runDir is always absolute after resolveOutputBase); it is empty
+// when there's no validation loop (the post-script's own last-iteration
+// scan is used instead) or when no iteration passed (the post-script is
+// skipped entirely in that case, so this is defensive).
 func postScriptRepoEnv(h *harness.Harness, runDir, hostRepositoryDownloadDir string, repoExtractedOK bool, validatedIterNum int) (repoDir, validatedIterDir string) {
 	if repoExtractedOK {
 		repoDir = hostRepositoryDownloadDir
@@ -4571,6 +4577,22 @@ func collectOpenshellLogs(sandboxName, runDir string, printer *ui.Printer) {
 	if collected > 0 {
 		printer.StepDone(fmt.Sprintf("Collected %d OpenShell log source(s) to %s", collected, logsDir))
 	}
+}
+
+// resolveOutputBase returns an absolute path for --output-dir. Empty input
+// uses the default ($TMPDIR/fullsend). Fails closed if Abs fails so runDir
+// and FULLSEND_VALIDATED_ITERATION_DIR never inherit a relative flag value
+// (#7522): a post-script whose cwd is runDir would otherwise resolve a
+// relative iteration path against runDir and miss the result file.
+func resolveOutputBase(outputBase string) (string, error) {
+	if outputBase == "" {
+		outputBase = filepath.Join(os.TempDir(), "fullsend")
+	}
+	abs, err := filepath.Abs(outputBase)
+	if err != nil {
+		return "", fmt.Errorf("resolving output dir: %w", err)
+	}
+	return abs, nil
 }
 
 // relOrAbs returns path relative to base, falling back to the absolute path if Rel fails.
