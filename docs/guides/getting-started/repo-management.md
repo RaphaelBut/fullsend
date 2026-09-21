@@ -432,6 +432,24 @@ Common causes:
   manifest schema (such as the legacy `mint:` key) are rejected.
 - **Wrong nesting level** — e.g., placing `fullsend_ref` under `defaults`
   instead of under `github` or `gitlab`.
+- **Renamed fields** — the old flat `config` / `config_hash` preset keys
+  were replaced by a nested `config_base` object. Rewrite `config:` as
+  `config_base: {source: <value>}` and `config_hash:` as
+  `config_base: {sha256: <value>}`, for both `defaults` and per-repo
+  entries:
+
+  ```yaml
+  # Before
+  defaults:
+    config: presets/base.yaml
+    config_hash: <sha256>
+
+  # After
+  defaults:
+    config_base:
+      source: presets/base.yaml
+      sha256: <sha256>
+  ```
 
 To fix, correct the field name or remove the unrecognized entry and re-run
 the command.

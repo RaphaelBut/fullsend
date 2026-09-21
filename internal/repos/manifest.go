@@ -105,10 +105,10 @@ type ConfigBase struct {
 	resolvedSource string `yaml:"-"`
 }
 
-// source returns the path to fetch: the Validate-resolved absolute
+// configSource returns the path to fetch: the Validate-resolved absolute
 // path for a local Source, or the raw Source value (empty, "none",
 // or an HTTPS URL) when no local-path resolution applies.
-func (c ConfigBase) source() string {
+func (c ConfigBase) configSource() string {
 	if c.resolvedSource != "" {
 		return c.resolvedSource
 	}
@@ -132,9 +132,10 @@ type RepoEntry struct {
 	// Vendor overrides the default vendor setting for this repo.
 	// nil inherits defaults.vendor; non-nil overrides it.
 	Vendor *bool `yaml:"vendor,omitempty"`
-	// ConfigBase is a local file path or HTTPS URL of a configuration
-	// preset written as .fullsend/config.base.yaml. Empty inherits
-	// defaults.config_base; source "none" disables inheritance.
+	// ConfigBase configures the configuration preset written as
+	// .fullsend/config.base.yaml. Empty Source inherits
+	// defaults.config_base; source "none" disables inheritance. SHA256
+	// is an optional digest verified against the fetched preset.
 	ConfigBase ConfigBase `yaml:"config_base,omitempty"`
 }
 
@@ -147,8 +148,10 @@ type DefaultsConfig struct {
 	// Vendor, when true, vendors the fullsend binary and content into
 	// each repo so CI does not need network access to fetch them.
 	Vendor *bool `yaml:"vendor,omitempty"`
-	// ConfigBase is the default configuration preset (local path or
-	// HTTPS URL) written as .fullsend/config.base.yaml.
+	// ConfigBase is the default configuration preset, written as
+	// .fullsend/config.base.yaml. Empty Source disables the default;
+	// source "none" disables inheritance for entries that reference it.
+	// SHA256 is an optional digest verified against the fetched preset.
 	ConfigBase ConfigBase `yaml:"config_base,omitempty"`
 }
 
@@ -865,12 +868,12 @@ func (m *Manifest) resolveWithEntry(owner, repo, forgeName string, platform *Pla
 	cfg.Vendor = resolveBoolField(entry.Vendor, m.Defaults.Vendor, false)
 	// ConfigBase: per-repo overrides defaults; source "none" disables
 	// the preset. A resolved empty source drops the hash so callers do
-	// not validate a digest against an unspecified document. source()
+	// not validate a digest against an unspecified document. configSource()
 	// returns the Validate-resolved absolute path for a local preset
 	// (falling back to the raw value for "", "none", and HTTPS sources)
 	// so a preset declared as a manifest-relative path fetches correctly
 	// without mutating the user-facing Source field.
-	cfg.Config = resolveField(entry.ConfigBase.source(), m.Defaults.ConfigBase.source(), "")
+	cfg.Config = resolveField(entry.ConfigBase.configSource(), m.Defaults.ConfigBase.configSource(), "")
 	if cfg.Config == "" {
 		cfg.ConfigHash = ""
 	} else {

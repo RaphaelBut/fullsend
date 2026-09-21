@@ -2027,7 +2027,7 @@ func TestValidate_LocalConfigSourceIsContainedAndResolvedRelativeToManifest(t *t
 	// RemoveFromManifest) round-trips it unchanged; only the internal
 	// fetch-time source is resolved to an absolute, manifest-relative path.
 	assert.Equal(t, "presets/base.yaml", m.Defaults.ConfigBase.Source)
-	assert.Equal(t, filepath.Join(base, "presets/base.yaml"), m.Defaults.ConfigBase.source())
+	assert.Equal(t, filepath.Join(base, "presets/base.yaml"), m.Defaults.ConfigBase.configSource())
 
 	escaping := &Manifest{
 		Version:   1,
