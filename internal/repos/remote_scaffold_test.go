@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -51,8 +52,6 @@ func TestFetchRemoteScaffold_GitLab(t *testing.T) {
 	}
 }
 
-const gitlabTrustCIServerCAPath = ".gitlab/ci/scripts/trust-ci-server-ca.sh"
-
 func TestGitLabScaffoldListsIncludeTrustScript(t *testing.T) {
 	files, err := scaffold.CollectGitLabPerRepoInstallFiles(nil, "", "")
 	if err != nil {
@@ -78,38 +77,29 @@ func TestGitLabScaffoldListsIncludeTrustScript(t *testing.T) {
 		if !remoteOut[yamlPath] {
 			t.Errorf("scaffoldGitLabPaths missing %s", yamlPath)
 		}
-		if !containsPath(gitlabScaffoldPaths, yamlPath) {
+		if !slices.Contains(gitlabScaffoldPaths, yamlPath) {
 			t.Errorf("gitlabScaffoldPaths missing %s", yamlPath)
 		}
 	}
 
-	if !installPaths[gitlabTrustCIServerCAPath] {
-		t.Errorf("embedded GitLab install files missing %s", gitlabTrustCIServerCAPath)
+	if !installPaths[gitlabTrustScriptPath] {
+		t.Errorf("embedded GitLab install files missing %s", gitlabTrustScriptPath)
 	}
-	if !remoteOut[gitlabTrustCIServerCAPath] {
-		t.Errorf("scaffoldGitLabPaths missing %s (poll/agent templates source it)", gitlabTrustCIServerCAPath)
+	if !remoteOut[gitlabTrustScriptPath] {
+		t.Errorf("scaffoldGitLabPaths missing %s (poll/agent templates source it)", gitlabTrustScriptPath)
 	}
-	if !containsPath(gitlabScaffoldPaths, gitlabTrustCIServerCAPath) {
-		t.Errorf("gitlabScaffoldPaths missing %s", gitlabTrustCIServerCAPath)
+	if !slices.Contains(gitlabScaffoldPaths, gitlabTrustScriptPath) {
+		t.Errorf("gitlabScaffoldPaths missing %s", gitlabTrustScriptPath)
 	}
 
 	for path := range installPaths {
 		if !remoteOut[path] {
 			t.Errorf("scaffoldGitLabPaths missing embedded install file %s", path)
 		}
-		if !containsPath(gitlabScaffoldPaths, path) {
+		if !slices.Contains(gitlabScaffoldPaths, path) {
 			t.Errorf("gitlabScaffoldPaths missing embedded install file %s", path)
 		}
 	}
-}
-
-func containsPath(paths []string, want string) bool {
-	for _, p := range paths {
-		if p == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestFetchRemoteScaffold_GitLab_IncludesTrustScript(t *testing.T) {
@@ -120,7 +110,7 @@ func TestFetchRemoteScaffold_GitLab_IncludesTrustScript(t *testing.T) {
 
 	for _, sp := range scaffoldGitLabPaths {
 		content := []byte("---\n__RUNNER_TAGS__\nVERSION=\"__FULLSEND_VERSION__\"\n")
-		if sp.outPath == gitlabTrustCIServerCAPath {
+		if sp.outPath == gitlabTrustScriptPath {
 			content = trustContent
 		}
 		fc.FileContentsRef[shimOwner+"/"+shimRepo+"/"+sp.repoPath+"@"+ref] = content
@@ -133,14 +123,14 @@ func TestFetchRemoteScaffold_GitLab_IncludesTrustScript(t *testing.T) {
 
 	var found bool
 	for _, f := range files {
-		if f.Path != gitlabTrustCIServerCAPath {
+		if f.Path != gitlabTrustScriptPath {
 			continue
 		}
 		found = true
 		if string(f.Content) != string(trustContent) {
 			t.Errorf("trust script content = %q, want %q", f.Content, trustContent)
 		}
-		wantMode := scaffold.FileMode(gitlabTrustCIServerCAPath)
+		wantMode := scaffold.FileMode(gitlabTrustScriptPath)
 		if f.Mode != wantMode {
 			t.Errorf("trust script mode = %q, want %q", f.Mode, wantMode)
 		}
