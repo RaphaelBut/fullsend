@@ -7,19 +7,31 @@ sidebar_position: 5
 Manage per-repo fullsend installations at scale using a declarative
 `repos.yaml` manifest. The `fullsend repos` command group provides bulk
 install, status checking, drift detection, configuration sync, and
-version upgrades across multiple repos and GitHub orgs.
+version upgrades across multiple repos, GitHub orgs, and GitLab groups.
 
 **Target audience:** Platform administrators (SRE/DevOps) managing
-fullsend across an organization. Individual repo owners should use
-`fullsend github setup` for single-repo installation (see
-[Configuring GitHub](configuring-github.md)).
+fullsend across an organization. For a single repository, GitHub owners
+should use `fullsend github setup` (see [Configuring GitHub](configuring-github.md));
+GitLab project owners should use `fullsend repos install --forge gitlab`
+(see [Configuring GitLab](configuring-gitlab.md)).
 
 ## Prerequisites
 
 - **fullsend CLI** installed (see [releases](https://github.com/fullsend-ai/fullsend/releases))
+
+The remaining prerequisites are forge-specific:
+
+**GitHub:**
+
 - **GitHub access** — admin or write access to the target repositories
 - **`gh` CLI** authenticated with the required OAuth scopes (see [OAuth scope reference](../infrastructure/advanced-setup.md#oauth-scope-reference))
 - **GCP prerequisites** — GCP WIF provisioning (`fullsend inference provision`) must be completed separately before running `repos install`. For self-managed mints, mint enrollment (`fullsend mint enroll`) is also required. The hosted community mint needs no enrollment — install the shared Apps and use the CLI defaults. When multiple repos share the same GCP project, existing inference secrets are reused automatically. See [Mint administration](../infrastructure/mint-administration.md) and [Advanced setup](../infrastructure/advanced-setup.md).
+
+**GitLab:**
+
+GitLab does not use `gh`, `fullsend inference provision`, or mint
+enrollment. See [Configuring GitLab § Prerequisites](configuring-gitlab.md#prerequisites)
+for the GitLab token, GCP inference project, and runner requirements.
 
 ## Getting started
 
@@ -96,14 +108,17 @@ GitHub repos use a token mint for authentication. The
 `mint_mode` and `mint_url` can be overridden per-repo.
 
 For GitLab repos, set the `GITLAB_TOKEN` environment variable or pass
-`--gitlab-token` to `fullsend repos` subcommands. When no manifest URL
-is set, the base URL falls back through `FULLSEND_GITLAB_URL` →
-`GITLAB_API_URL` → `CI_SERVER_URL`, defaulting to `gitlab.com` when
-none are set. You can also pass `--gitlab-url` to `fullsend repos install`
-to set `gitlab.url` in the manifest (this also implies `--forge=gitlab`
-when no forge is specified). Self-hosted instances that use a private CA
-need runner `tls-ca-file` plus separate sandbox-host trust — see
-[Private CA (self-hosted GitLab)](operations.md#private-ca-self-hosted-gitlab).
+`--gitlab-token` to `fullsend repos` subcommands. Manifest-driven commands
+(`repos install` and `repos status`) require `gitlab.url` whenever GitLab
+repos are present, including gitlab.com; there is no manifest default. Pass
+`--gitlab-url` to `fullsend repos install` to set it (this also implies
+`--forge=gitlab` when no forge is specified), or set it later with
+`fullsend repos set-default gitlab.url <url>`. The env-var fallback chain
+(`FULLSEND_GITLAB_URL` → `GITLAB_API_URL` → `CI_SERVER_URL`, defaulting to
+gitlab.com) applies only to call paths without a manifest URL, such as
+`repos migrate`; it does not override manifest validation. Self-hosted
+instances that use a private CA need runner `tls-ca-file` plus separate
+sandbox-host trust — see [Private CA (self-hosted GitLab)](operations.md#private-ca-self-hosted-gitlab).
 
 Per-repo fields inherit from the platform-level default when omitted.
 To explicitly stop a field from inheriting, set it to the literal value
@@ -219,10 +234,11 @@ Install runs in two phases:
    repaired automatically; ref updates are committed as PRs (or direct
    pushes with `--direct`).
 
-> **Prerequisite:** GCP WIF provisioning (`fullsend inference provision`)
-> must be completed before running install. For self-managed mints,
-> also run `fullsend mint enroll`. The hosted community mint needs no
-> enrollment.
+> **GitHub prerequisite:** GCP WIF provisioning
+> (`fullsend inference provision`) must be completed before running install.
+> For self-managed mints, also run `fullsend mint enroll`. The hosted
+> community mint needs no enrollment. For GitLab prerequisites and inference
+> setup, see [Configuring GitLab](configuring-gitlab.md#prerequisites).
 
 > **Note:** When your token does not have direct push access to a target
 > repository, the install command creates a fork and submits the scaffold
@@ -566,7 +582,7 @@ infrastructure, coordinate between roles:
 | Step | Role | Command |
 |------|------|---------|
 | 1 | Platform Admin | `fullsend repos uninstall "org/*" --yes` (forge-side cleanup + manifest removal) |
-| 2 | GCP Admin (Inference) | `fullsend inference deprovision <org>` (WIF cleanup) |
+| 2 | GCP Admin (Inference) | GitHub: `fullsend inference deprovision <org>` (WIF cleanup). GitLab: `inference deprovision` does not cover the shared `gitlab-oidc` provider — see [Operations § Per-repo teardown](operations.md#per-repo-teardown) step 6 to revoke each repo's WIF trust instead. |
 | 3 | GCP Admin (Mint) | `fullsend mint unenroll <org>` (self-hosted mints only; not needed for the hosted community mint) |
 
 Each `fullsend` command that prompts for confirmation accepts a skip
@@ -575,6 +591,7 @@ commands.
 
 ## See also
 
+- [Configuring GitLab](configuring-gitlab.md) — GitLab-specific getting-started guide
 - [Operations](operations.md) — Day-2 per-repo administration and standalone commands
 - [Per-Org Mode](org-mode.md) — Organization-mode installation (planned deprecation)
 - [CLI Reference: fullsend repos](../../cli/repos.md) — Full flag and subcommand reference
