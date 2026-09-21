@@ -7,10 +7,10 @@
 // three-role enum.
 //
 // This package is the internal contract for provisioning (#7498) and
-// routing (#7499). It does not provision tokens, mutate CI
-// configuration, or change job authentication. When migration mode is
-// disabled (the default), Resolve selects the shared
-// FULLSEND_FORGE_TOKEN exactly as existing installations do.
+// routing (#7499). Select / SelectAgent / Require are the dispatch-time
+// entry points wired into fullsend poll, fullsend run, and post-review.
+// When migration mode is disabled (the default), Resolve selects the
+// shared FULLSEND_FORGE_TOKEN exactly as existing installations do.
 //
 // Canonical documentation: docs/contributing/gitlab-role-credentials.md.
 package gitlabroles
