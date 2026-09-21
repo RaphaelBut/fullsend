@@ -455,12 +455,17 @@ Leave these to the follow-up issues.
 
 ## Credential-routing security checklist
 
-Hold these four invariants when changing `internal/gitlabroles`, GitLab
-credential handling in `internal/cli`, or the remaining rollout stage
+Hold these four code invariants and the documentation-terminology rule
+below when changing `internal/gitlabroles`, GitLab credential handling
+in `internal/cli`, or the remaining rollout stage
 ([#7501](https://github.com/fullsend-ai/fullsend/issues/7501)). They are
 the review findings from [PR #7510](https://github.com/fullsend-ai/fullsend/pull/7510)
 (stage 3 routing). A later change that selects, stores, or hands a
 GitLab role credential to a child process can reintroduce any of them.
+The documentation-terminology rule comes from
+[#7513](https://github.com/fullsend-ai/fullsend/issues/7513), keeping
+fallback wording consistent across docs rather than fixing a routing
+bug.
 Extend the helpers named below rather than adding a parallel path.
 
 ### Check the authenticating token, not a role label
@@ -536,6 +541,33 @@ fallback.
       marked breaking.
 - [ ] Shared-token fallback is removed only in the #7501 cutover, after
       role checks pass, and is marked `!`.
+
+### Keep fallback terminology consistent across docs
+
+Two distinct fallback mechanisms share similar wording and are easy to
+conflate. Use these terms, and do not mix them:
+
+- **shared-token fallback** — selecting `FULLSEND_FORGE_TOKEN` as the
+  credential. This is the always-on path in `disabled` / `rollback`,
+  and the explicit fallback in `migrating` when that role's secret is
+  unconfigured. It does not apply in `enforced`.
+- **local direct-GITLAB_TOKEN fallback** — the documented local-dev
+  workflow where `GITLAB_TOKEN` is set with no `FULLSEND_FORGE_TOKEN`.
+  `fullsend run --forge gitlab` treats
+  `gitlabroles.ErrSharedUnconfigured` as a no-op in `disabled` /
+  `rollback` so the pre-set token still works. This path does **not**
+  apply in `migrating` or `enforced`.
+
+These two are described independently in four documents:
+
+- this file (`docs/contributing/gitlab-role-credentials.md`)
+- [`docs/cli/run.md`](../cli/run.md)
+- [`docs/guides/user/running-agents-locally.md`](../guides/user/running-agents-locally.md)
+- [`docs/problems/security-threat-model.md`](../problems/security-threat-model.md)
+
+- [ ] Any change that touches fallback or migration-gate behavior
+      re-reads all four documents and updates them with the same
+      terms. Do not edit only the file under your cursor.
 
 ## Security notes
 
