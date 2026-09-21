@@ -51,6 +51,105 @@ func TestFetchRemoteScaffold_GitLab(t *testing.T) {
 	}
 }
 
+const gitlabTrustCIServerCAPath = ".gitlab/ci/scripts/trust-ci-server-ca.sh"
+
+func TestGitLabScaffoldListsIncludeTrustScript(t *testing.T) {
+	files, err := scaffold.CollectGitLabPerRepoInstallFiles(nil, "", "")
+	if err != nil {
+		t.Fatalf("CollectGitLabPerRepoInstallFiles() error: %v", err)
+	}
+
+	installPaths := make(map[string]bool, len(files))
+	for _, f := range files {
+		installPaths[f.Path] = true
+	}
+	remoteOut := make(map[string]bool, len(scaffoldGitLabPaths))
+	for _, sp := range scaffoldGitLabPaths {
+		remoteOut[sp.outPath] = true
+	}
+
+	for _, yamlPath := range []string{
+		".gitlab/ci/fullsend-poll.yml",
+		".gitlab/ci/fullsend-agent.yml",
+	} {
+		if !installPaths[yamlPath] {
+			t.Fatalf("embedded GitLab install files missing %s", yamlPath)
+		}
+		if !remoteOut[yamlPath] {
+			t.Errorf("scaffoldGitLabPaths missing %s", yamlPath)
+		}
+		if !containsPath(gitlabScaffoldPaths, yamlPath) {
+			t.Errorf("gitlabScaffoldPaths missing %s", yamlPath)
+		}
+	}
+
+	if !installPaths[gitlabTrustCIServerCAPath] {
+		t.Errorf("embedded GitLab install files missing %s", gitlabTrustCIServerCAPath)
+	}
+	if !remoteOut[gitlabTrustCIServerCAPath] {
+		t.Errorf("scaffoldGitLabPaths missing %s (poll/agent templates source it)", gitlabTrustCIServerCAPath)
+	}
+	if !containsPath(gitlabScaffoldPaths, gitlabTrustCIServerCAPath) {
+		t.Errorf("gitlabScaffoldPaths missing %s", gitlabTrustCIServerCAPath)
+	}
+
+	for path := range installPaths {
+		if !remoteOut[path] {
+			t.Errorf("scaffoldGitLabPaths missing embedded install file %s", path)
+		}
+		if !containsPath(gitlabScaffoldPaths, path) {
+			t.Errorf("gitlabScaffoldPaths missing embedded install file %s", path)
+		}
+	}
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, p := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestFetchRemoteScaffold_GitLab_IncludesTrustScript(t *testing.T) {
+	fc := forge.NewFakeClient()
+	ref := "v0.35.0"
+	sha := "deadbeef1234567890abcdef1234567890abcdef"
+	trustContent := []byte("#!/usr/bin/env bash\n# CI_SERVER_TLS_CA_FILE\n")
+
+	for _, sp := range scaffoldGitLabPaths {
+		content := []byte("---\n__RUNNER_TAGS__\nVERSION=\"__FULLSEND_VERSION__\"\n")
+		if sp.outPath == gitlabTrustCIServerCAPath {
+			content = trustContent
+		}
+		fc.FileContentsRef[shimOwner+"/"+shimRepo+"/"+sp.repoPath+"@"+ref] = content
+	}
+
+	files, err := FetchRemoteScaffold(context.Background(), fc, ref, sha, ForgeGitLab, []string{"docker"}, false)
+	if err != nil {
+		t.Fatalf("FetchRemoteScaffold() error: %v", err)
+	}
+
+	var found bool
+	for _, f := range files {
+		if f.Path != gitlabTrustCIServerCAPath {
+			continue
+		}
+		found = true
+		if string(f.Content) != string(trustContent) {
+			t.Errorf("trust script content = %q, want %q", f.Content, trustContent)
+		}
+		wantMode := scaffold.FileMode(gitlabTrustCIServerCAPath)
+		if f.Mode != wantMode {
+			t.Errorf("trust script mode = %q, want %q", f.Mode, wantMode)
+		}
+	}
+	if !found {
+		t.Fatal("FetchRemoteScaffold GitLab files missing trust-ci-server-ca.sh")
+	}
+}
+
 func TestFetchRemoteScaffold_GitHub_IncludesThinCallers(t *testing.T) {
 	fc := forge.NewFakeClient()
 	ref := "v0.42.0"

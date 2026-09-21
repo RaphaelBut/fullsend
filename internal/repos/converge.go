@@ -866,7 +866,7 @@ func convergeRepo(ctx context.Context,
 
 	scaffoldNeedsRepair := false
 	for _, c := range d.components {
-		if !c.Match && (c.Name == "workflow" || strings.HasPrefix(c.Name, "thin-caller:")) {
+		if !c.Match && (c.Name == "workflow" || strings.HasPrefix(c.Name, "thin-caller:") || strings.HasPrefix(c.Name, "scaffold:")) {
 			scaffoldNeedsRepair = true
 			break
 		}
@@ -1631,7 +1631,7 @@ func convergeScaffoldFiles(ctx context.Context,
 		if c.Match {
 			continue
 		}
-		if c.Name == "workflow" || strings.HasPrefix(c.Name, "thin-caller:") {
+		if c.Name == "workflow" || strings.HasPrefix(c.Name, "thin-caller:") || strings.HasPrefix(c.Name, "scaffold:") {
 			field := DriftFieldName(c.Name)
 			if !c.Present {
 				missingComponents = append(missingComponents, field)
