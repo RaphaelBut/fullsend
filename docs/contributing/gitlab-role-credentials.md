@@ -15,8 +15,12 @@ The Go package is [`internal/gitlabroles`](../../internal/gitlabroles/).
 Provisioning of built-in and custom role credentials is implemented by
 `repos install` (`internal/repos` / `internal/cli`). Routing of jobs and
 forge operations by registered role is implemented by `fullsend poll`,
-`fullsend run`, and `fullsend post-review`. Rotation and shared-token
-retirement remain follow-up issues.
+`fullsend run`, and `fullsend post-review`. Rotation
+([#7500](https://github.com/fullsend-ai/fullsend/issues/7500)) and
+shared-token retirement
+([#7501](https://github.com/fullsend-ai/fullsend/issues/7501)) remain
+follow-up issues; both must follow the
+[credential-routing security checklist](#credential-routing-security-checklist).
 
 Built-in and custom roles are the same kind of registry entry. Job
 credential selection walks that registry; it does not switch on a
@@ -374,9 +378,94 @@ Leave these to the follow-up issues.
 | --- | --- |
 | [#7498](https://github.com/fullsend-ai/fullsend/issues/7498) | **Implemented.** `repos install` creates/enrolls built-in and custom PATs, stores them as protected masked CI variables, writes the registry, sets the gate, reports partial provisioning, preserves the shared token, and handles reinstall/drift/uninstall without deleting credentials still in use |
 | [#7499](https://github.com/fullsend-ai/fullsend/issues/7499) | **Implemented.** `fullsend poll`, `fullsend run`, and `fullsend post-review` select the registered role credential, enforce `ValidateAgent` / `Registration.Has` in role-aware modes, and fail closed on authentication failure without switching identities |
-| [#7500](https://github.com/fullsend-ai/fullsend/issues/7500) | Rotation, recovery, in-flight jobs, expiry/revocation diagnostics |
-| [#7501](https://github.com/fullsend-ai/fullsend/issues/7501) | Verification, enable `enforced`, retire the shared token |
+| [#7500](https://github.com/fullsend-ai/fullsend/issues/7500) | Rotation, recovery, in-flight jobs, expiry/revocation diagnostics. Hold the [credential-routing security checklist](#credential-routing-security-checklist) |
+| [#7501](https://github.com/fullsend-ai/fullsend/issues/7501) | Verification, enable `enforced`, retire the shared token. Hold the [credential-routing security checklist](#credential-routing-security-checklist) |
 | [#7502](https://github.com/fullsend-ai/fullsend/issues/7502) | ADR 0067 status annotation and operator-facing lifecycle docs |
+
+## Credential-routing security checklist
+
+Hold these four invariants when changing `internal/gitlabroles`, GitLab
+credential handling in `internal/cli`, or the remaining rollout stages
+([#7500](https://github.com/fullsend-ai/fullsend/issues/7500),
+[#7501](https://github.com/fullsend-ai/fullsend/issues/7501)). They are
+the review findings from [PR #7510](https://github.com/fullsend-ai/fullsend/pull/7510)
+(stage 3 routing). A later change that selects, stores, or hands a
+GitLab role credential to a child process can reintroduce any of them.
+Extend the helpers named below rather than adding a parallel path.
+
+### Check the authenticating token, not a role label
+
+Capability and permission checks must validate the **token that will
+actually authenticate the call**, not a role-label env var
+(`FULLSEND_GITLAB_ROLE`, `STAGE`, or equivalent). Labels select a
+registration; they can diverge from the credential (for example
+`--token` pointing at a different role's secret). Compare the
+authenticating token against `getenv(sel.Source.SecretName)` before
+trusting `gitlabroles.Require`. A mismatch fails closed with
+`gitlabroles.ErrIdentityMismatch`. See `checkGitLabApprovalCapability`
+in `internal/cli/gitlab_role.go`.
+
+- [ ] New capability checks compare the authenticating token to the
+      selected role's own secret value.
+- [ ] A label/token mismatch fails closed; it does not check the wrong
+      identity's capabilities.
+
+### Blank sibling role secrets after selection
+
+After selecting a credential, blank every other registered role secret
+(and the shared `FULLSEND_FORGE_TOKEN`) from the process environment
+**before** invoking a pre/post-script. Host-side scripts inherit the
+whole process environment via `childScriptEnv`. A leftover
+`FULLSEND_GITLAB_ANALYST_TOKEN` in a Coder job lets a script
+authenticate as Analyst and bypass in-process checks such as
+`checkGitLabApprovalCapability`. See `clearSiblingGitLabRoleSecrets` /
+`applyGitLabRoleSelection`.
+
+- [ ] Selection blanks sibling role secrets and the unused shared token
+      in role-aware modes.
+- [ ] New rotation or recovery paths that write a replacement secret do
+      not leave the previous or sibling raw value in the process
+      environment of a subsequent child.
+
+### Pin routing env vars against runner_env override
+
+`GITLAB_TOKEN`, `FULLSEND_FORGE_TOKEN`, and every `FULLSEND_GITLAB_*`
+var must be pinned to the process environment when building a
+child-script env. A harness `runner_env` / `env.runner` entry must not
+shadow the dispatch-selected identity. `childScriptEnv` drops those
+keys from `runnerEnv` via `isPinnedGitLabRoleRoutingKey`.
+
+`PUSH_TOKEN` is **not** pinned: the GitHub coder-remint path
+(`syncRunnerEnvTokens`, #7231) relies on `runner_env` overriding a
+stale process-env `PUSH_TOKEN`, and GitLab never writes `PUSH_TOKEN`
+through that path. Do not pin `PUSH_TOKEN` to "close the set" — that
+reintroduces #7231 for GitHub runs.
+
+- [ ] New GitLab identity or credential env vars are covered by
+      `isPinnedGitLabRoleRoutingKey` (or an equivalent pin).
+- [ ] `PUSH_TOKEN` stays unpinned unless the GitHub remint path is
+      redesigned in the same change.
+
+### Preserve non-role-aware token fallbacks
+
+Do not break the documented local-run workflow unless the change is
+explicitly breaking (`!` suffix and a `BREAKING CHANGE:` trailer per
+[COMMITS.md](../../COMMITS.md)). In `disabled` / `rollback`
+(`UsesSharedOnly`), `fullsend run --forge gitlab` falls back to a no-op
+when the only error is `gitlabroles.ErrSharedUnconfigured`, so a
+directly-set `GITLAB_TOKEN` (no `FULLSEND_FORGE_TOKEN`) still works.
+Role-aware modes (`migrating` / `enforced`) still fail closed.
+
+Retiring the **shared-token** fallback is the point of #7501 and must
+be an explicit, flagged cutover after verification — not a silent
+tightening of `disabled`/`rollback` or of the local `GITLAB_TOKEN`
+fallback.
+
+- [ ] `disabled`/`rollback` still accept a directly-set `GITLAB_TOKEN`
+      when `FULLSEND_FORGE_TOKEN` is absent, unless this change is
+      marked breaking.
+- [ ] Shared-token fallback is removed only in the #7501 cutover, after
+      role checks pass, and is marked `!`.
 
 ## Security notes
 
@@ -394,3 +483,5 @@ Leave these to the follow-up issues.
   tokens as least-privilege API grants.
 - `CI_DEBUG_TRACE` remains forbidden on jobs that hold any of these
   variables.
+- When changing credential routing, rotation, or cutover, follow the
+  [credential-routing security checklist](#credential-routing-security-checklist).
