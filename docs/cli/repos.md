@@ -237,7 +237,7 @@ File deletions (workflow YAML, `.fullsend/config.yaml`, and GitLab `.gitlab-ci.y
 
 Uninstall PR delivery intentionally reuses the same branch as `repos install`/`converge` (`fullsend/scaffold-install`), since already-deployed per-repo shims only exclude that branch name from dispatch. **Known limitation:** if an install PR is still open on that branch when uninstall runs (or an uninstall PR is open when install/converge runs), the existing PR is updated with the new commit but its title and body are left unchanged — the PR may show an install-oriented title while its diff now removes files, or vice versa. Check the PR's diff, not just its title, before merging when install and uninstall run close together against the same repo.
 
-GCP WIF pool/provider cleanup is handled separately via `inference deprovision`.
+GCP WIF pool/provider cleanup for GitHub repos is handled separately via `inference deprovision`. This does not cover GitLab's shared `gitlab-oidc` WIF provider — for GitLab repos, see [Operations § Per-repo teardown](../guides/getting-started/operations.md#per-repo-teardown) step 6 to revoke that repo's WIF trust.
 
 When multiple repos are targeted (via globs or explicit bulk lists), the command prompts for confirmation unless `--yes` is set.
 
@@ -342,5 +342,6 @@ fullsend repos set-default gitlab.url https://gitlab.example.com
 ## See also
 
 - [Getting Started](../guides/getting-started/) — Standard per-repo installation
+- [Configuring GitLab](../guides/getting-started/configuring-gitlab.md) — GitLab getting-started guide
 - [Operations](../guides/getting-started/operations.md) — Day-2 administration
 - [CLI Internals](../guides/dev/cli-internals.md) — Command structure and implementation details
