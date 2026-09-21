@@ -449,9 +449,11 @@ Vendoring commit messages use title + body (upload and stale delete). `github st
 │  │                                          │                   │
 │  │  UploadDir (tar) to /sandbox/workspace:  │                   │
 │  │  ├── fullsend binary (cross-compiled)    │                   │
-│  │  ├── agent definition file               │                   │
 │  │  ├── skills/ directory                   │                   │
-│  │  ├── plugins/ directory                  │                   │
+│  │  └── plugins/ directory                  │                   │
+│  │                                          │                   │
+│  │  Upload (single file):                   │                   │
+│  │  ├── agent definition file               │                   │
 │  │  ├── host_files (expanded ${VAR} paths)  │                   │
 │  │  ├── .env file (bootstrapEnv)            │                   │
 │  │  └── security hooks                      │                   │
