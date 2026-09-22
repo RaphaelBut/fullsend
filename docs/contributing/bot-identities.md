@@ -61,3 +61,7 @@ instead of the shared token (see
 rollback keep the shared `fullsend-bot` identity. Role registration is
 install-state only; repository and merge-request content cannot create
 or elevate a GitLab role.
+The guarded [`--gitlab-role-cutover --gitlab-role-cutover-drained`](../cli/repos.md#gitlab-role-cutover)
+operation is the exception: after shared-token jobs drain, it enables
+`enforced` mode and retires `FULLSEND_FORGE_TOKEN`; missing role credentials
+then surface as drift.

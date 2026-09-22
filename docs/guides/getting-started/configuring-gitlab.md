@@ -103,7 +103,10 @@ then converges the project:
   access with `api` scope and stores it as the protected CI/CD variable
   `FULLSEND_FORGE_TOKEN`. Fresh installs also provision the built-in role
   credentials and migration gate; see the [CLI reference](../../cli/repos.md#gitlab-bot-token)
-  for the role-credential options and protected-branch caveat.
+  for the role-credential options and protected-branch caveat. After shared
+  jobs drain, the guarded [`--gitlab-role-cutover --gitlab-role-cutover-drained`](../../cli/repos.md#gitlab-role-cutover)
+  operation deletes `FULLSEND_FORGE_TOKEN`; missing role credentials are
+  drift while the migration gate is `enforced`.
 * Creates two pipeline schedules: `fullsend slash poll` (every 5 minutes)
   and `fullsend event poll` (at minutes 2, 17, 32, 47).
 * Writes inference CI/CD variables when `--inference-project` is set.

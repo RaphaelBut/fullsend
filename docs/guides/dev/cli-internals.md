@@ -82,7 +82,9 @@ fullsend
 │   │   ├── --gitlab-role-registry <path>    #   Administrator GitLab role registry JSON
 │   │   ├── --gitlab-role-token role=token   #   Administrator-provided GitLab role PAT (repeatable)
 │   │   ├── --rotate-gitlab-roles            #   Force-rotate GitLab role credentials
-│   │   └── --rotate-gitlab-role <name>      #   Rotate a specific GitLab role (repeatable)
+│   │   ├── --rotate-gitlab-role <name>      #   Rotate a specific GitLab role (repeatable)
+│   │   ├── --gitlab-role-cutover            #   Verify roles, enforce routing, and retire the shared credential
+│   │   └── --gitlab-role-cutover-drained    #   Confirm in-flight shared-token jobs have drained
 │   ├── uninstall    <repos...>              # Tear down fullsend from repos and remove from manifest
 │   │   ├── -f, --manifest <path>            #   Path to repos.yaml (default: repos.yaml)
 │   │   ├── --dry-run                        #   Preview without making changes
