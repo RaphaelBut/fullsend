@@ -379,9 +379,6 @@ func (a gitlabTokenAdapter) ListProjectAccessTokens(ctx context.Context, owner, 
 
 func prepareGitLabRoleFlags(opts *reposInstallConfig) error {
 	s := strings.ToLower(strings.TrimSpace(opts.gitlabRoleMigration))
-	if s == "enforced" {
-		return fmt.Errorf("--gitlab-role-migration=enforced is reserved for verification (see #7501); use migrating, rollback, or disabled")
-	}
 	if s != "" {
 		mode, err := gitlabroles.ParseMode(s)
 		if err != nil {
@@ -430,47 +427,24 @@ func parseGitLabRoleTokens(flags []string) (map[gitlabroles.Role]string, error) 
 	return out, nil
 }
 
-func maybeProvisionGitLabRoles(ctx context.Context, opts *reposInstallConfig, client forge.Client, printer *ui.Printer, owner, repo string, fresh bool) error {
-	needed, current, err := gitLabRoleWorkNeeded(ctx, client, opts, owner, repo, fresh)
+func maybeProvisionGitLabRoles(ctx context.Context, opts *reposInstallConfig, client forge.Client, printer *ui.Printer, owner, repo string) error {
+	needed, mode, err := gitLabRoleWorkNeeded(ctx, client, opts, owner, repo)
 	if err != nil {
 		return err
 	}
 	if !needed {
 		return nil
 	}
-	mode := opts.gitlabRoleModeFlag
-	if mode == "" {
-		// Preserve the live gate's mode (migrating, enforced, rollback, or
-		// disabled) unless the operator explicitly passes
-		// --gitlab-role-migration. Without this, supplying only
-		// --gitlab-role-registry or --gitlab-role-token on an install that
-		// was explicitly rolled back or disabled would silently re-enable
-		// migration.
-		mode = current
-	}
+	// gitLabRoleWorkNeeded already resolves the mode to provision with,
+	// including preserving an explicit rollback gate, promoting legacy
+	// disabled/unset installs to migrating, and keeping an explicit
+	// --gitlab-role-migration=enforced request from writing the enforced
+	// gate directly (CutoverGitLabRoleCredentials is the sole writer of
+	// enforced, once role readiness has been verified).
 	return setupGitLabRoleCredentials(ctx, opts, client, printer, owner, repo, mode)
 }
 
-func gitLabRoleWorkNeeded(ctx context.Context, client forge.Client, opts *reposInstallConfig, owner, repo string, fresh bool) (bool, gitlabroles.Mode, error) {
-	if opts.gitlabRoleModeFlag != "" {
-		raw, exists, err := client.GetRepoVariable(ctx, owner, repo, forge.VarGitLabRoleMigration)
-		if err != nil {
-			return false, "", fmt.Errorf("reading %s: %w", forge.VarGitLabRoleMigration, err)
-		}
-		if exists {
-			current, err := gitlabroles.ParseMode(raw)
-			if err != nil {
-				return false, "", err
-			}
-			if current == gitlabroles.ModeEnforced && opts.gitlabRoleModeFlag == gitlabroles.ModeMigrating {
-				return false, "", fmt.Errorf("refusing to replace enforced GitLab role migration mode with migrating; request rollback or disabled explicitly")
-			}
-			if current == gitlabroles.ModeEnforced && opts.gitlabRoleModeFlag.UsesSharedOnly() && !opts.gitlabRoleRollbackConfirmed {
-				return false, "", fmt.Errorf("leaving enforced GitLab role migration mode requires --gitlab-role-rollback-confirmed")
-			}
-		}
-		return true, opts.gitlabRoleModeFlag, nil
-	}
+func gitLabRoleWorkNeeded(ctx context.Context, client forge.Client, opts *reposInstallConfig, owner, repo string) (bool, gitlabroles.Mode, error) {
 	raw, exists, err := client.GetRepoVariable(ctx, owner, repo, forge.VarGitLabRoleMigration)
 	if err != nil {
 		return false, "", fmt.Errorf("reading %s: %w", forge.VarGitLabRoleMigration, err)
@@ -483,32 +457,47 @@ func gitLabRoleWorkNeeded(ctx context.Context, client forge.Client, opts *reposI
 		}
 		current = mode
 	}
-	if fresh {
-		// If FULLSEND_GITLAB_ROLE_MIGRATION fails to write on this fresh
-		// install, the failure is reported on this run, but the repo is
-		// no longer "fresh" on a later unflagged `repos install` (the
-		// workflow is now on the default branch). That later run falls
-		// through to the live-gate read below, finds the gate still
-		// missing, treats it as ModeDisabled, and reports "no work
-		// needed" instead of retrying. Recovery requires the operator to
-		// explicitly re-run with --gitlab-role-migration=migrating.
+	if opts.gitlabRoleModeFlag != "" {
 		if exists {
-			if opts.gitlabRoleRegistryJSON != "" || len(opts.gitlabRoleProvided) > 0 {
-				return true, current, nil
+			if current == gitlabroles.ModeEnforced && opts.gitlabRoleModeFlag == gitlabroles.ModeMigrating {
+				return false, "", fmt.Errorf("refusing to replace enforced GitLab role migration mode with migrating; request rollback or disabled explicitly")
 			}
-			return current == gitlabroles.ModeMigrating || current == gitlabroles.ModeEnforced, current, nil
+			if current == gitlabroles.ModeEnforced && opts.gitlabRoleModeFlag.UsesSharedOnly() && !opts.gitlabRoleRollbackConfirmed {
+				return false, "", fmt.Errorf("leaving enforced GitLab role migration mode requires --gitlab-role-rollback-confirmed")
+			}
 		}
+		if opts.gitlabRoleModeFlag == gitlabroles.ModeEnforced {
+			// CutoverGitLabRoleCredentials must be the sole writer of the
+			// enforced gate, after role readiness has been verified.
+			// Provisioning with the flag's enforced value directly would
+			// let a partial provisioning run leave the gate at enforced
+			// with missing role secrets if the explicit cutover that
+			// follows then fails closed. Provision with the live
+			// non-shared-only mode instead (already-enforced stays
+			// enforced; anything shared-only is promoted to migrating),
+			// and let cutover promote to enforced once every role is
+			// ready.
+			if current.UsesSharedOnly() {
+				return true, gitlabroles.ModeMigrating, nil
+			}
+			return true, current, nil
+		}
+		return true, opts.gitlabRoleModeFlag, nil
+	}
+	// Unflagged install: emergency rollback stays rolled back until the
+	// operator explicitly re-enables a role-aware mode. Legacy shared-token
+	// (disabled/unset) installs are promoted to migrating so a later
+	// automatic cutover can retire FULLSEND_FORGE_TOKEN once roles are ready.
+	if current == gitlabroles.ModeRollback {
+		if opts.gitlabRoleRegistryJSON != "" || len(opts.gitlabRoleProvided) > 0 {
+			return true, current, nil
+		}
+		return false, current, nil
+	}
+	if current == gitlabroles.ModeDisabled {
 		return true, gitlabroles.ModeMigrating, nil
 	}
-	// The mode flag is empty: always read the live gate so an operator who
-	// only passes --gitlab-role-registry or --gitlab-role-token (without
-	// --gitlab-role-migration) gets their existing rollback/disabled/
-	// enforced decision back as current, rather than an empty mode that
-	// the caller would otherwise default to migrating.
-	if opts.gitlabRoleRegistryJSON != "" || len(opts.gitlabRoleProvided) > 0 {
-		return true, current, nil
-	}
-	return current == gitlabroles.ModeMigrating || current == gitlabroles.ModeEnforced, current, nil
+	return true, current, nil
 }
 
 func setupGitLabRoleCredentials(ctx context.Context, opts *reposInstallConfig, client forge.Client, printer *ui.Printer, owner, repo string, mode gitlabroles.Mode) error {
@@ -613,6 +602,10 @@ func maybeRotateGitLabRoles(ctx context.Context, opts *reposInstallConfig, clien
 }
 
 func maybeCutoverGitLabRoles(ctx context.Context, opts *reposInstallConfig, client forge.Client, printer *ui.Printer, owner, repo string) error {
+	if opts.gitlabRoleModeFlag == gitlabroles.ModeRollback || opts.gitlabRoleModeFlag == gitlabroles.ModeDisabled {
+		return nil
+	}
+	explicit := opts.gitlabRoleCutover || opts.gitlabRoleModeFlag == gitlabroles.ModeEnforced
 	if opts.gitlabRoleRegistryJSON != "" {
 		_, err := gitlabroles.ParseRegistry(opts.gitlabRoleRegistryJSON)
 		if err != nil {
@@ -620,12 +613,28 @@ func maybeCutoverGitLabRoles(ctx context.Context, opts *reposInstallConfig, clie
 		}
 	}
 	repoFullName := owner + "/" + repo
+	if !explicit {
+		mode, _, _, err := repos.LoadGitLabRoleState(ctx, client, owner, repo)
+		if err != nil {
+			return err
+		}
+		if mode.UsesSharedOnly() {
+			return nil
+		}
+	}
 	var tokens repos.ProjectAccessTokenClient
 	if opts.testGitLabTokenInventory != nil {
 		tokens = opts.testGitLabTokenInventory
 	} else if glClient, ok := client.(*gitlab.LiveClient); ok {
 		tokens = gitlabTokenAdapter{c: glClient}
 	}
+	if tokens == nil && !explicit {
+		return nil
+	}
+	// Explicit --gitlab-role-cutover still requires --gitlab-role-cutover-drained.
+	// Ordinary install and --gitlab-role-migration=enforced assume drain as part
+	// of converging to the enforced desired state.
+	drainConfirmed := opts.gitlabRoleCutoverDrained || !opts.gitlabRoleCutover
 	printer.StepStart(fmt.Sprintf("[%s] Verifying and cutting over GitLab role credentials", repoFullName))
 	result, err := repos.CutoverGitLabRoleCredentials(ctx, repos.GitLabRoleCutoverConfig{
 		Owner: owner, Repo: repo, Client: client,
@@ -633,9 +642,13 @@ func maybeCutoverGitLabRoles(ctx context.Context, opts *reposInstallConfig, clie
 		// because a forge client is wrapped or substituted. Test clients can
 		// call the repos package directly with an explicit inventory.
 		TokenInventory: tokens,
-		DrainConfirmed: opts.gitlabRoleCutoverDrained, DryRun: opts.dryRun,
+		DrainConfirmed: drainConfirmed, DryRun: opts.dryRun,
 	})
 	if err != nil {
+		if !explicit && repos.IsGitLabRoleCutoverDeferred(err) {
+			printer.StepInfo(fmt.Sprintf("[%s] GitLab role cutover deferred: %v", repoFullName, err))
+			return nil
+		}
 		printer.StepFail(fmt.Sprintf("[%s] GitLab role cutover failed", repoFullName))
 		return err
 	}

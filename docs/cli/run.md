@@ -293,7 +293,7 @@ troubleshooting: [OpenAI Workload Identity](../guides/infrastructure/openai-work
 
 On `--forge gitlab` (or when `GITLAB_CI=true`), `fullsend run` does not mint a GitHub App token. It selects a registered GitLab role credential and exports `GITLAB_TOKEN` from that CI/CD variable:
 
-- Gate unset/`disabled`/`rollback`: shared `FULLSEND_FORGE_TOKEN` (existing installations). If `FULLSEND_FORGE_TOKEN` is absent, a directly-set `GITLAB_TOKEN` is still used as a fallback (a warning is logged).
+- Gate unset/`disabled`/`rollback`: shared `FULLSEND_FORGE_TOKEN` (legacy shared-token runtime, or explicit rollback/disabled recovery — ordinary unflagged `repos install` now converges existing shared-token installs to `migrating` and then `enforced` once roles are ready, so it no longer keeps them on this gate by default). If `FULLSEND_FORGE_TOKEN` is absent, a directly-set `GITLAB_TOKEN` is still used as a fallback (a warning is logged).
 - `migrating`/`enforced`: Poller/Analyst/Coder (or a registered custom role) via `gitlabroles.SelectAgent`. Unregistered custom agents fail closed. Analyst jobs do not receive `PUSH_TOKEN`. A Coder identity cannot approve a merge request.
 
 See [GitLab Role-Credential Contract](../contributing/gitlab-role-credentials.md).
