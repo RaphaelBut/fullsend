@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -66,6 +68,7 @@ func (h *codexAdapterHarness) embeddedScript(name string, content []byte) string
 }
 
 func (h *codexAdapterHarness) installPostToolChain() {
+	h.t.Helper()
 	for name, content := range map[string][]byte{
 		"posttool_chain.py":            security.PostToolChainHook,
 		"hook_io.py":                   security.HookIO,
@@ -358,6 +361,7 @@ sys.exit(0)`)
 	got := h.run("PostToolUse", input, "chain.py")
 	assert.Equal(t, 2, got.exitCode)
 	assert.Empty(t, got.stdout)
+	assert.Contains(t, got.stderr, "withheld")
 }
 
 func TestCodexAdapter_PostToolUseWithholdsMalformedUnicodeCategories(t *testing.T) {
@@ -912,4 +916,144 @@ sys.exit(0)`)
 	assert.Equal(t, "/pinned/bin:/usr/bin", string(got),
 		"the child's PATH comes from the pinned value, not the inherited one")
 	assert.NotContains(t, string(got), "/planted/bin")
+}
+
+// codexSuppressibleSecret is `go test` output the suppress stage condenses
+// on the first pass, carrying a key split by an ANSI escape so only the
+// unicode stage's normalisation lets the redactor see it.
+const codexSuppressibleSecret = "ok example.test 0.5s\nOPENAI_API_KEY=sk-proj-abcdefghijkl\x1b[31mnopqrstuvwx\x1b[0m"
+
+// With the unicode stage disabled the rescan still sees an obfuscated key:
+// the redact stage matches on hook_io's detection form, which strips escapes
+// and invisible characters itself.
+func TestCodexAdapter_PostToolUseRescanWithoutTheUnicodeStage(t *testing.T) {
+	h := newCodexAdapterHarness(t)
+	h.installPostToolChain()
+	require.NoError(t, os.Remove(filepath.Join(h.hooksDir, "unicode_posttool.py")))
+	delete(h.digests, "unicode_posttool.py")
+
+	input := codexBashInput("go test ./...")
+	input["hook_event_name"] = "PostToolUse"
+	input["tool_response"] = codexSuppressibleSecret
+	got := h.run("PostToolUse", input, "posttool_chain.py")
+	assert.Equal(t, 2, got.exitCode, got.stderr)
+	assert.Empty(t, got.stdout)
+	assert.Contains(t, got.stderr, "withheld")
+	assert.NotContains(t, got.stderr, "sk-proj-")
+}
+
+// The chain imports its stages from the hooks directory. Re-hashing only the
+// chain itself would leave a neutered stage free to wave the original through.
+func TestCodexAdapter_PostToolUseReverifiesChainStages(t *testing.T) {
+	for name, tamper := range map[string]func(h *codexAdapterHarness){
+		"neutered stage": func(h *codexAdapterHarness) {
+			// The real module with redact_text overridden to find nothing, so
+			// every other entry point the chain calls still works and no stage
+			// error gives the tampering away.
+			neutered := string(security.SecretRedactPostToolHook) +
+				"\n\ndef redact_text(text, skip=frozenset(), *args, **kwargs):\n    return text, []\n"
+			require.NoError(t, os.WriteFile(filepath.Join(h.hooksDir, "secret_redact_posttool.py"),
+				[]byte(neutered), 0o755))
+		},
+		"neutered helper": func(h *codexAdapterHarness) {
+			f, err := os.OpenFile(filepath.Join(h.hooksDir, "hook_io.py"), os.O_APPEND|os.O_WRONLY, 0)
+			require.NoError(t, err)
+			_, err = f.WriteString("\n# changed\n")
+			require.NoError(t, err)
+			require.NoError(t, f.Close())
+		},
+		"missing stage": func(h *codexAdapterHarness) {
+			require.NoError(t, os.Remove(filepath.Join(h.hooksDir, "canary_posttool.py")))
+		},
+		"planted disabled stage": func(h *codexAdapterHarness) {
+			require.NoError(t, os.Remove(filepath.Join(h.hooksDir, "context_suppress_posttool.py")))
+			delete(h.digests, "context_suppress_posttool.py")
+			require.NoError(t, os.WriteFile(filepath.Join(h.hooksDir, "context_suppress_posttool.py"),
+				security.ContextSuppressPostToolHook, 0o755))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newCodexAdapterHarness(t)
+			h.installPostToolChain()
+			tamper(h)
+
+			input := codexBashInput("go test ./...")
+			input["hook_event_name"] = "PostToolUse"
+			// A plain key: with the redactor neutered nothing else would
+			// catch it, so only the stage check stands between it and codex.
+			input["tool_response"] = "ok example.test 0.5s\nOPENAI_API_KEY=sk-proj-abcdefghijklnopqrstuvwx"
+			got := h.run("PostToolUse", input, "posttool_chain.py")
+			assert.Equal(t, 2, got.exitCode, got.stderr)
+			assert.Empty(t, got.stdout)
+			assert.Contains(t, got.stderr, "fail closed")
+			assert.NotContains(t, got.stderr, "sk-proj-")
+		})
+	}
+}
+
+// CHAIN_SIBLINGS must name every file the chain can import, or a stage added
+// to posttool_chain.py later would be loaded without being re-hashed.
+func TestCodexAdapterChainSiblingsMatchTheChain(t *testing.T) {
+	chain := string(security.PostToolChainHook)
+	want := []string{"hook_io.py"}
+	for _, m := range regexp.MustCompile(`"([a-z_]+_posttool\.py)"`).FindAllStringSubmatch(chain, -1) {
+		if !slices.Contains(want, m[1]) {
+			want = append(want, m[1])
+		}
+	}
+	require.Contains(t, chain, "import hook_io")
+	var got []string
+	require.NoError(t, json.Unmarshal([]byte(codexAdapterFunc(t, "list(m.CHAIN_SIBLINGS)")), &got))
+	assert.ElementsMatch(t, want, got)
+}
+
+// codexAdapterFunc loads the embedded adapter as a module and prints the
+// JSON result of expr, so pure helpers are tested without spawning codex.
+func codexAdapterFunc(t *testing.T, expr string) string {
+	t.Helper()
+	h := newCodexAdapterHarness(t)
+	src := "import importlib.util, json, sys\n" +
+		"spec = importlib.util.spec_from_file_location('adapter', " + pyStr(h.adapter) + ")\n" +
+		"m = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(m)\n" +
+		"print(json.dumps(" + expr + "))\n"
+	out, err := exec.Command(h.python, "-c", src).CombinedOutput()
+	require.NoError(t, err, string(out))
+	return strings.TrimSpace(string(out))
+}
+
+// codex kills a hook at the handler timeout, and a killed hook does not
+// block. Two chain passes of up to SCRIPT_TIMEOUT_S each cannot both fit, so
+// each spawn gets only what is left of the budget, and none starts without a
+// usable remainder.
+func TestCodexAdapter_ScriptTimeoutFitsTheHandlerBudget(t *testing.T) {
+	assert.Equal(t, "25", codexAdapterFunc(t, "m.script_timeout(0)"))
+	assert.Equal(t, "null", codexAdapterFunc(t,
+		"m.script_timeout(m.HANDLER_TIMEOUT_S - m.BUDGET_MARGIN_S - m.MIN_SCRIPT_S + 0.5)"))
+	got := codexAdapterFunc(t, "m.script_timeout(10) + 10 + m.BUDGET_MARGIN_S <= m.HANDLER_TIMEOUT_S")
+	assert.Equal(t, "true", got, "a spawn started at 10 s must end before codex's deadline")
+}
+
+func TestCodexAdapter_HandlerTimeoutMatchesHooksJSON(t *testing.T) {
+	assert.Equal(t, strconv.Itoa(security.HookTimeoutSeconds), codexAdapterFunc(t, "m.HANDLER_TIMEOUT_S"),
+		"the adapter's budget must be the handler timeout written into hooks.json")
+}
+
+// A pass that has no budget left is withheld, not started and killed.
+func TestCodexAdapter_PostToolUseWithholdsWhenTheBudgetIsSpent(t *testing.T) {
+	h := newCodexAdapterHarness(t)
+	h.installPostToolChain()
+	// Stand in for a slow first pass: the adapter reads the clock from here.
+	adapter, err := os.ReadFile(h.adapter)
+	require.NoError(t, err)
+	patched := strings.Replace(string(adapter), "_START = time.monotonic()",
+		"_START = time.monotonic() - 27.5", 1)
+	require.NotEqual(t, string(adapter), patched, "the adapter must keep its clock in _START")
+	require.NoError(t, os.WriteFile(h.adapter, []byte(patched), 0o755))
+
+	input := codexBashInput("go test ./...")
+	input["hook_event_name"] = "PostToolUse"
+	input["tool_response"] = "ok example.test 0.5s\n"
+	got := h.run("PostToolUse", input, "posttool_chain.py")
+	assert.Equal(t, 2, got.exitCode, got.stderr)
+	assert.Contains(t, got.stderr, "hook budget")
 }

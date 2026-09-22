@@ -168,7 +168,9 @@ What a local codex run needs, beyond the guide:
   replace the output of a built-in tool, so a result containing a secret, unsafe hidden Unicode or
   a canary is withheld instead of reaching the model unredacted. Context-only suppression and
   ANSI cleanup are skipped because those results are safe to pass unchanged; suppressed output runs
-  through the full security chain again with suppression disabled first. OSC and unclassified rewrites are withheld. Your run
+  through the full security chain again with suppression disabled first. OSC and unclassified
+  rewrites are withheld, and so is a result the hooks run out of time to check
+  (`not enough of codex's hook budget is left to run posttool_chain.py`). Your run
   artifacts are redacted either way — `output.jsonl`, the transcripts and `codex-debug.log` are all
   scrubbed before they are written.
 - **Skills** work as they do on Claude Code: the harness's skills, plus your repository's own

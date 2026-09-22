@@ -63,6 +63,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -77,10 +78,35 @@ HOOK_DIGESTS_ENV = "FULLSEND_CODEX_HOOK_DIGESTS"
 # The PATH captured before the agent-writable .env was sourced. See _child_env.
 PINNED_PATH_ENV = "FULLSEND_CODEX_PATH"
 
-# Bound one script run. The hooks.json handler timeout (30 s) is codex's own
-# ceiling on this whole adapter; this one is per script so a wedged stage
-# cannot consume the budget of the ones after it.
+# Bound one script run, so a wedged stage cannot consume the budget of the
+# ones after it.
 SCRIPT_TIMEOUT_S = 25
+
+# codex's ceiling on this whole adapter: the hooks.json handler timeout,
+# security.HookTimeoutSeconds. codex kills a hook that exceeds it and records
+# it as `Failed`, which does not block, so every spawn must end inside it.
+# Several scripts, or a chain pass plus its rescan, can each take up to
+# SCRIPT_TIMEOUT_S, so a spawn only gets what is left (see script_timeout).
+HANDLER_TIMEOUT_S = 30
+# Headroom for interpreter start-up before _START and for exiting after the
+# last spawn.
+BUDGET_MARGIN_S = 2
+# A spawn that could not finish python start-up is not started at all.
+MIN_SCRIPT_S = 1
+_START = time.monotonic()
+
+# The PostToolUse chain, and every file it may import from the hooks
+# directory: its shared helper and the stages in posttool_chain.py's
+# _STAGE_FILES. It loads a stage whenever the file exists, so the adapter
+# re-hashes each one before spawning the chain. See verify_chain_siblings.
+CHAIN_SCRIPT = "posttool_chain.py"
+CHAIN_SIBLINGS = (
+    "hook_io.py",
+    "context_suppress_posttool.py",
+    "unicode_posttool.py",
+    "secret_redact_posttool.py",
+    "canary_posttool.py",
+)
 
 # codex caps hook strings well below this; the scripts already summarize.
 MAX_TEXT = 9000
@@ -232,6 +258,37 @@ def verify_script_digest(script: str, path: str) -> str | None:
     return None
 
 
+def verify_chain_siblings() -> str | None:
+    """Check every file the chain may import, returning a block reason or None.
+
+    verify_script_digest re-hashes the script the adapter spawns, but the chain
+    imports its stages itself. A stage rewritten mid-iteration to return its
+    input unchanged would pass every check on the chain's own digest and let a
+    secret through. A sibling in the digest map must match it; one that is not
+    in the map (a disabled stage, which HookFiles omits) must not exist,
+    because the chain would load it.
+    """
+    digests = expected_digests() or {}
+    for name in CHAIN_SIBLINGS:
+        path = os.path.join(HOOKS_DIR, name)
+        if name in digests:
+            error = verify_script_digest(name, path)
+            if error is not None:
+                return error
+        elif os.path.lexists(path):
+            return f"fullsend: hook {name} is not one fullsend installed (fail closed)"
+    return None
+
+
+def script_timeout(elapsed: float) -> float | None:
+    """The timeout for a spawn starting `elapsed` seconds into the handler,
+    or None when too little of codex's budget is left to start one."""
+    remaining = HANDLER_TIMEOUT_S - BUDGET_MARGIN_S - elapsed
+    if remaining < MIN_SCRIPT_S:
+        return None
+    return min(SCRIPT_TIMEOUT_S, remaining)
+
+
 def log_finding(name: str, severity: str, detail: str, action: str) -> None:
     """Append to the shared findings log. The adapter's own decisions belong
     there rather than on stderr: on an exit-2 run stderr *is* the block reason
@@ -284,12 +341,22 @@ def run_script(script: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Run one hook script with payload on stdin and normalize its verdict.
 
     Mirrors `runScript` in the pi extension: a non-zero exit or a
-    `{"decision":"block"}` object blocks, and a script that cannot be spawned
-    or times out blocks too."""
+    `{"decision":"block"}` object blocks, and a script that cannot be spawned,
+    times out, or has no budget left to run blocks too."""
     path = os.path.join(HOOKS_DIR, script)
     digest_error = verify_script_digest(script, path)
+    if digest_error is None and script == CHAIN_SCRIPT:
+        digest_error = verify_chain_siblings()
     if digest_error is not None:
         return {"block": True, "reason": digest_error, "output": None}
+    timeout = script_timeout(time.monotonic() - _START)
+    if timeout is None:
+        return {
+            "block": True,
+            "reason": f"fullsend: not enough of codex's hook budget is left to run {script} "
+            "(fail closed)",
+            "output": None,
+        }
     if not os.path.isfile(path):
         # Explicit rather than incidental: a missing script would otherwise
         # surface as python3's own exit 2, which blocks for the right reason
@@ -305,7 +372,7 @@ def run_script(script: str, payload: dict[str, Any]) -> dict[str, Any]:
             input=json.dumps(payload),
             capture_output=True,
             text=True,
-            timeout=SCRIPT_TIMEOUT_S,
+            timeout=timeout,
             env=_child_env(),
         )
     except Exception as err:  # noqa: BLE001 - any spawn failure must fail closed
@@ -411,8 +478,10 @@ def context_was_suppressed(output: Any) -> bool:
     return isinstance(metadata, dict) and bool(metadata.get("context_suppressed"))
 
 
-def hook_is_installed(script: str) -> bool:
-    """Whether the named embedded hook passed integrity verification."""
+def stage_enabled(script: str) -> bool:
+    """Whether the runner installed the named chain stage (it is in the digest
+    map). This is not an integrity check: run_script re-hashes every stage
+    before each chain spawn (verify_chain_siblings)."""
     digests = expected_digests()
     return digests is not None and script in digests
 
@@ -503,9 +572,7 @@ def run_post_tool_use(scripts: list[str], hook_input: dict[str, Any], tool_name:
                     "that codex cannot safely rewrite; the result was withheld"
                 )
             if context_was_suppressed(verdict["output"]):
-                if script != "posttool_chain.py" or not hook_is_installed(
-                    "secret_redact_posttool.py"
-                ):
+                if script != CHAIN_SCRIPT or not stage_enabled("secret_redact_posttool.py"):
                     block(
                         "fullsend: context suppression could not prove the original tool output "
                         "safe on codex, so the result was withheld"
@@ -536,9 +603,10 @@ def run_post_tool_use(scripts: list[str], hook_input: dict[str, Any], tool_name:
                         "fullsend: the previous tool output contained security-sensitive content "
                         "that codex cannot safely rewrite; the result was withheld"
                     )
-                # The rescan only proves the original content safe. Keep
-                # evaluating the first-pass rewrite below so any additional,
-                # unknown metadata remains fail-closed.
+                # The rescan proves the original content safe; it does not
+                # vouch for the first pass. That rewrite must still be one the
+                # adapter knows is safe to drop, so metadata a future stage adds
+                # next to context_suppressed stays fail-closed.
             if benign_rewrite(verdict["output"]):
                 continue
             log_finding(
