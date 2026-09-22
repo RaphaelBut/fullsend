@@ -106,16 +106,10 @@ the overlay → base → code defaults chain.
 | `models.aliases` | `map[string]string` (nested) | Per-key merge | `nil` (fleet defaults) |
 | `create_issues` | `*CreateIssuesConfig` | Replace whole object if set | `nil` |
 | `status_notifications` | `*StatusNotificationConfig` | Replace whole object if set | `nil` |
-| `authorization`¹ | `[]AuthorizationProvider` | Overlay only (not layered) | `nil` |
+| `authorization` | `[]AuthorizationProvider` | Overlay only (not layered) | `nil` |
 
-> ¹ `authorization` is a list of authorization providers
-> (`AuthorizationProvider` / `AuthorizationOwnersFile()`) consumed
-> by both the dispatch workflow's bash/yq and `internal/harnessdispatch`.
-> It is intentionally **overlay-only**: `AuthorizationOwnersFile()`
-> does not fall through to the parent config, so setting it in
-> `config.base.yaml` has no effect — each repo must opt in explicitly.
-> See [#6072](https://github.com/fullsend-ai/fullsend/issues/6072) for
-> the planned migration to the Go config layer.
+`authorization` is overlay-only: setting it in `config.base.yaml` has no
+effect, so each repo must opt in explicitly.
 
 ### Per-agent `runtime`, `model`, `effort`, `subagents` on `agents:` entries
 
@@ -422,12 +416,14 @@ backends. Currently one provider is supported:
   to the GitHub collaborator API. OWNERS approvers get write-equivalent
   access; reviewers get triage-equivalent. If the user is not listed in
   OWNERS, authorization falls through to the collaborator API — OWNERS
-  never blocks a collaborator who isn't in the file.
+  never blocks a collaborator who isn't in the file. An entry that names
+  an `OWNERS_ALIASES` key matches only that alias's members, never a
+  login of the same name.
 
 This applies to both the bash routing path (built-in stages) and the
-Go harness-dispatch path (custom agents). A missing or malformed OWNERS
-file fails closed: the OWNERS check is skipped and authorization falls
-through to the collaborator API.
+Go harness-dispatch path (custom agents). A missing or malformed `OWNERS`
+file, or a malformed `OWNERS_ALIASES` file, fails closed: the OWNERS check is
+skipped and authorization falls through to the collaborator API.
 
 v1 limitation: only the repo-root flat `approvers`/`reviewers` lists
 are read. Prow `filters:` blocks and nested per-directory OWNERS files
@@ -467,6 +463,7 @@ compiled-in defaults apply:
 | `models.aliases` | `nil` (fleet alias table compiled into the runtimes) |
 | `create_issues` | `nil` |
 | `status_notifications` | `nil` |
+| `authorization` | `nil` |
 
 ## Related
 

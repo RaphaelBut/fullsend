@@ -325,7 +325,8 @@ The existing design principle is that [the repo is the coordinator](problems/age
   a `NormalizedEvent`, whose actor is the configured service identity. GitHub
   paths check the acting user's collaborator permission via the repository API
   (`write` or above for mutation commands; `triage` or above for observation
-  stages). Non-GitHub event paths map source-system roles to dispatch
+  stages); a repo that enables the `owners_file` authorization provider also
+  grants these roles to its Prow `OWNERS` approvers and reviewers. Non-GitHub event paths map source-system roles to dispatch
   authorization roles (`read`, `write`, `admin`) using source-native role
   resolution, with no cross-system identity verification
   ([Authorization Contract v1](normative/authorization/v1/);
