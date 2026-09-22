@@ -721,10 +721,10 @@ func TestParseGitLabRoleTokens(t *testing.T) {
 }
 
 func TestPrepareGitLabRoleFlags(t *testing.T) {
-	t.Run("rejects enforced", func(t *testing.T) {
-		err := prepareGitLabRoleFlags(&reposInstallConfig{gitlabRoleMigration: "enforced"})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "#7501")
+	t.Run("accepts enforced", func(t *testing.T) {
+		opts := &reposInstallConfig{gitlabRoleMigration: "enforced"}
+		require.NoError(t, prepareGitLabRoleFlags(opts))
+		assert.Equal(t, gitlabroles.ModeEnforced, opts.gitlabRoleModeFlag)
 	})
 
 	t.Run("parses migrating and registry file", func(t *testing.T) {
@@ -793,7 +793,7 @@ func TestMaybeProvisionGitLabRoles_FreshAndExistingMigrating(t *testing.T) {
 	var buf bytes.Buffer
 	printer := ui.New(&buf)
 
-	require.NoError(t, maybeProvisionGitLabRoles(ctx, &reposInstallConfig{}, fake, printer, "group", "project", true))
+	require.NoError(t, maybeProvisionGitLabRoles(ctx, &reposInstallConfig{}, fake, printer, "group", "project"))
 	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
 
 	fake2 := forge.NewFakeClient()
@@ -801,7 +801,7 @@ func TestMaybeProvisionGitLabRoles_FreshAndExistingMigrating(t *testing.T) {
 	fake2.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "migrating"
 	fake2.VariablesExist["group/project/"+forge.VarGitLabRoleMigration] = true
 	buf.Reset()
-	require.NoError(t, maybeProvisionGitLabRoles(ctx, &reposInstallConfig{}, fake2, printer, "group", "project", false))
+	require.NoError(t, maybeProvisionGitLabRoles(ctx, &reposInstallConfig{}, fake2, printer, "group", "project"))
 	assert.Contains(t, buf.String(), "Provisioning GitLab role credentials")
 }
 
@@ -881,24 +881,24 @@ func TestGitLabRoleWorkNeededExistingEnforced(t *testing.T) {
 	fake := forge.NewFakeClient()
 	fake.VariableValues["g/p/"+forge.VarGitLabRoleMigration] = "enforced"
 	fake.VariablesExist["g/p/"+forge.VarGitLabRoleMigration] = true
-	needed, mode, err := gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{}, "g", "p", false)
+	needed, mode, err := gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{}, "g", "p")
 	require.NoError(t, err)
 	assert.True(t, needed)
 	assert.Equal(t, gitlabroles.ModeEnforced, mode)
 
-	needed, _, err = gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{gitlabRoleModeFlag: gitlabroles.ModeRollback}, "g", "p", false)
+	needed, _, err = gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{gitlabRoleModeFlag: gitlabroles.ModeRollback}, "g", "p")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "gitlab-role-rollback-confirmed")
 	needed, mode, err = gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{
 		gitlabRoleModeFlag:          gitlabroles.ModeRollback,
 		gitlabRoleRollbackConfirmed: true,
-	}, "g", "p", false)
+	}, "g", "p")
 	require.NoError(t, err)
 	assert.True(t, needed)
 	assert.Equal(t, gitlabroles.ModeRollback, mode)
 
 	fake.Errors["GetRepoVariable"] = fmt.Errorf("denied")
-	_, _, err = gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{}, "g", "p", false)
+	_, _, err = gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{}, "g", "p")
 	require.Error(t, err)
 }
 
@@ -908,7 +908,7 @@ func TestGitLabRoleWorkNeededFreshPreservesEnforcedGate(t *testing.T) {
 		VariablesExist: map[string]bool{"g/p/" + forge.VarGitLabRoleMigration: true},
 		VariableValues: map[string]string{"g/p/" + forge.VarGitLabRoleMigration: string(gitlabroles.ModeEnforced)},
 	}
-	needed, mode, err := gitLabRoleWorkNeeded(context.Background(), fake, &reposInstallConfig{}, "g", "p", true)
+	needed, mode, err := gitLabRoleWorkNeeded(context.Background(), fake, &reposInstallConfig{}, "g", "p")
 	require.NoError(t, err)
 	assert.True(t, needed)
 	assert.Equal(t, gitlabroles.ModeEnforced, mode)
@@ -955,9 +955,7 @@ func TestMaybeCutoverGitLabRoles(t *testing.T) {
 	assert.False(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
 }
 
-func TestMaybeCutoverGitLabRolesRequiresTokenInventory(t *testing.T) {
-	ctx := context.Background()
-	fake := forge.NewFakeClient()
+func seedCLICutoverReady(fake *forge.FakeClient) {
 	fake.Secrets["group/project/"+forge.SecretForgeToken] = true
 	fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "migrating"
 	fake.VariablesExist["group/project/"+forge.VarGitLabRoleMigration] = true
@@ -968,10 +966,166 @@ func TestMaybeCutoverGitLabRolesRequiresTokenInventory(t *testing.T) {
 	} {
 		fake.Secrets["group/project/"+name] = true
 	}
+}
+
+func TestMaybeCutoverGitLabRolesRequiresTokenInventory(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	seedCLICutoverReady(fake)
 	var buf bytes.Buffer
-	err := maybeCutoverGitLabRoles(ctx, &reposInstallConfig{gitlabRoleCutoverDrained: true}, fake, ui.New(&buf), "group", "project")
+	// Ordinary unflagged install skips cutover when there is no inventory
+	// rather than failing converge.
+	err := maybeCutoverGitLabRoles(ctx, &reposInstallConfig{}, fake, ui.New(&buf), "group", "project")
+	require.NoError(t, err)
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
+
+	buf.Reset()
+	err = maybeCutoverGitLabRoles(ctx, &reposInstallConfig{gitlabRoleCutover: true, gitlabRoleCutoverDrained: true}, fake, ui.New(&buf), "group", "project")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "project-token inventory")
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
+}
+
+func TestMaybeCutoverGitLabRolesAutomaticOnUnflaggedReady(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	seedCLICutoverReady(fake)
+	var buf bytes.Buffer
+	err := maybeCutoverGitLabRoles(ctx, &reposInstallConfig{testGitLabTokenInventory: cliCutoverTokens{}}, fake, ui.New(&buf), "group", "project")
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "cutover complete")
+	assert.Equal(t, "enforced", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.False(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
+}
+
+func TestMaybeCutoverGitLabRolesAutomaticDefersWhenNotReady(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	seedCLICutoverReady(fake)
+	delete(fake.Secrets, "group/project/"+forge.SecretGitLabCoderToken)
+	var buf bytes.Buffer
+	err := maybeCutoverGitLabRoles(ctx, &reposInstallConfig{testGitLabTokenInventory: cliCutoverTokens{}}, fake, ui.New(&buf), "group", "project")
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "cutover deferred")
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken], "partial enrollment must not reopen or drop the shared credential")
+}
+
+func TestMaybeCutoverGitLabRolesAutomaticSkipsRollback(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.Secrets["group/project/"+forge.SecretForgeToken] = true
+	fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration] = "rollback"
+	fake.VariablesExist["group/project/"+forge.VarGitLabRoleMigration] = true
+	var buf bytes.Buffer
+	err := maybeCutoverGitLabRoles(ctx, &reposInstallConfig{testGitLabTokenInventory: cliCutoverTokens{}}, fake, ui.New(&buf), "group", "project")
+	require.NoError(t, err)
+	assert.NotContains(t, buf.String(), "cutting over")
+	assert.Equal(t, "rollback", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
+}
+
+func TestMaybeCutoverGitLabRolesExplicitRequiresDrain(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	seedCLICutoverReady(fake)
+	var buf bytes.Buffer
+	err := maybeCutoverGitLabRoles(ctx, &reposInstallConfig{
+		gitlabRoleCutover:        true,
+		testGitLabTokenInventory: cliCutoverTokens{},
+	}, fake, ui.New(&buf), "group", "project")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "in-flight shared-token jobs are drained")
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
+}
+
+func TestMaybeCutoverGitLabRolesEnforcedFlagDoesNotRequireDrain(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	seedCLICutoverReady(fake)
+	var buf bytes.Buffer
+	err := maybeCutoverGitLabRoles(ctx, &reposInstallConfig{
+		gitlabRoleModeFlag:       gitlabroles.ModeEnforced,
+		testGitLabTokenInventory: cliCutoverTokens{},
+	}, fake, ui.New(&buf), "group", "project")
+	require.NoError(t, err)
+	assert.Equal(t, "enforced", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.False(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
+}
+
+func TestGitLabRoleWorkNeededExistingDisabledPromotesToMigrating(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	needed, mode, err := gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{}, "g", "p")
+	require.NoError(t, err)
+	assert.True(t, needed)
+	assert.Equal(t, gitlabroles.ModeMigrating, mode)
+}
+
+func TestGitLabRoleWorkNeededExistingRollbackStaysRolledBack(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.VariableValues["g/p/"+forge.VarGitLabRoleMigration] = "rollback"
+	fake.VariablesExist["g/p/"+forge.VarGitLabRoleMigration] = true
+	needed, mode, err := gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{}, "g", "p")
+	require.NoError(t, err)
+	assert.False(t, needed)
+	assert.Equal(t, gitlabroles.ModeRollback, mode)
+}
+
+func TestMaybeCutoverGitLabRolesSkipsRequestedRollback(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	seedCLICutoverReady(fake)
+	var buf bytes.Buffer
+	err := maybeCutoverGitLabRoles(ctx, &reposInstallConfig{
+		gitlabRoleModeFlag:       gitlabroles.ModeRollback,
+		testGitLabTokenInventory: cliCutoverTokens{},
+	}, fake, ui.New(&buf), "group", "project")
+	require.NoError(t, err)
+	assert.NotContains(t, buf.String(), "cutting over")
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
+}
+
+func TestMaybeProvisionThenCutoverExistingDisabled(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.Secrets["group/project/"+forge.SecretForgeToken] = true
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	require.NoError(t, maybeProvisionGitLabRoles(ctx, &reposInstallConfig{}, fake, printer, "group", "project"))
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	for _, name := range []string{
+		forge.SecretGitLabPollerToken,
+		forge.SecretGitLabAnalystToken,
+		forge.SecretGitLabCoderToken,
+	} {
+		fake.Secrets["group/project/"+name] = true
+	}
+	buf.Reset()
+	err := maybeCutoverGitLabRoles(ctx, &reposInstallConfig{testGitLabTokenInventory: cliCutoverTokens{}}, fake, printer, "group", "project")
+	require.NoError(t, err)
+	assert.Equal(t, "enforced", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.False(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
+}
+
+func TestMaybeCutoverGitLabRolesExplicitNotReadyFails(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	seedCLICutoverReady(fake)
+	delete(fake.Secrets, "group/project/"+forge.SecretGitLabCoderToken)
+	var buf bytes.Buffer
+	err := maybeCutoverGitLabRoles(ctx, &reposInstallConfig{
+		gitlabRoleCutover:        true,
+		gitlabRoleCutoverDrained: true,
+		testGitLabTokenInventory: cliCutoverTokens{},
+	}, fake, ui.New(&buf), "group", "project")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not ready")
 	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
 	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
 }
@@ -999,7 +1153,7 @@ func TestMaybeProvisionGitLabRoles_PreservesRollbackWithRegistryOnly(t *testing.
 	// overwritten back to migrating.
 	opts := &reposInstallConfig{gitlabRoleRegistryJSON: `{"roles":[]}`}
 
-	err := maybeProvisionGitLabRoles(ctx, opts, fake, printer, "group", "project", false)
+	err := maybeProvisionGitLabRoles(ctx, opts, fake, printer, "group", "project")
 	require.NoError(t, err)
 	assert.Equal(t, "rollback", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
 }
@@ -1014,7 +1168,47 @@ func TestSetupGitLabRoleCredentials_RegistryReadError(t *testing.T) {
 	assert.NotContains(t, err.Error(), "glpat-")
 }
 
-func TestMaybeProvisionGitLabRoles_SkipExistingDisabled(t *testing.T) {
+func TestMaybeProvisionGitLabRoles_ReadError(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.Errors["GetRepoVariable"] = fmt.Errorf("denied")
+	var buf bytes.Buffer
+	err := maybeProvisionGitLabRoles(ctx, &reposInstallConfig{}, fake, ui.New(&buf), "group", "project")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), forge.VarGitLabRoleMigration)
+}
+
+func TestMaybeProvisionGitLabRoles_ExplicitMigratingFlag(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.Secrets["group/project/"+forge.SecretForgeToken] = true
+	var buf bytes.Buffer
+	opts := &reposInstallConfig{gitlabRoleModeFlag: gitlabroles.ModeMigrating}
+	require.NoError(t, maybeProvisionGitLabRoles(ctx, opts, fake, ui.New(&buf), "group", "project"))
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+}
+
+func TestGitLabRoleWorkNeededInvalidLiveMode(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.VariableValues["g/p/"+forge.VarGitLabRoleMigration] = "nope"
+	fake.VariablesExist["g/p/"+forge.VarGitLabRoleMigration] = true
+	_, _, err := gitLabRoleWorkNeeded(ctx, fake, &reposInstallConfig{}, "g", "p")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, gitlabroles.ErrInvalidMode)
+}
+
+func TestMaybeCutoverGitLabRolesLoadStateError(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.Errors["GetRepoVariable"] = fmt.Errorf("denied")
+	var buf bytes.Buffer
+	err := maybeCutoverGitLabRoles(ctx, &reposInstallConfig{testGitLabTokenInventory: cliCutoverTokens{}}, fake, ui.New(&buf), "group", "project")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), forge.VarGitLabRoleMigration)
+}
+
+func TestMaybeProvisionGitLabRoles_ExistingDisabledPromotesToMigrating(t *testing.T) {
 	ctx := context.Background()
 	fake := forge.NewFakeClient()
 	fake.Secrets["group/project/"+forge.SecretForgeToken] = true
@@ -1022,10 +1216,11 @@ func TestMaybeProvisionGitLabRoles_SkipExistingDisabled(t *testing.T) {
 	printer := ui.New(&buf)
 	opts := &reposInstallConfig{}
 
-	err := maybeProvisionGitLabRoles(ctx, opts, fake, printer, "group", "project", false)
+	err := maybeProvisionGitLabRoles(ctx, opts, fake, printer, "group", "project")
 	require.NoError(t, err)
-	assert.Empty(t, fake.UpdatedVariables)
-	assert.NotContains(t, buf.String(), "Provisioning GitLab role credentials")
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.Contains(t, buf.String(), "Provisioning GitLab role credentials")
+	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken], "partial enrollment must not recreate or drop the shared credential")
 }
 
 func TestCleanupGitLabRoleTokens(t *testing.T) {
