@@ -48,9 +48,9 @@ which is a stronger check than the trust hash it replaces.
 > **Implementation note (September 2026):** Security-sensitive and unclassified rewrites now
 > block and withhold the original result. Only context suppression and ANSI-only cleanup with
 > known-safe metadata pass unchanged; suppressed output runs through the full chain again with
-> suppression disabled first. Before each chain run the adapter re-hashes every stage the chain
-> imports, and each script run gets only what is left of the 30 s handler budget; a run with too
-> little left is withheld rather than started and killed.
+> suppression disabled first. Before each chain run the adapter checks the whole hooks directory
+> against the runner-held digests, and each script run gets only what is left of the 30 s handler
+> budget; a run with too little left is withheld rather than started and killed.
 
 Because the hook scripts and their directory stay agent-writable between iterations — the residue
 Claude Code and pi also have — codex additionally **re-verifies every script against runner-held digests

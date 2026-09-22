@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -966,6 +965,14 @@ func TestCodexAdapter_PostToolUseReverifiesChainStages(t *testing.T) {
 		"missing stage": func(h *codexAdapterHarness) {
 			require.NoError(t, os.Remove(filepath.Join(h.hooksDir, "canary_posttool.py")))
 		},
+		// Python prefers a package over a module of the same name on one
+		// path entry, so this shadows the verified hook_io.py.
+		"shadowing package": func(h *codexAdapterHarness) {
+			pkg := filepath.Join(h.hooksDir, "hook_io")
+			require.NoError(t, os.MkdirAll(pkg, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(pkg, "__init__.py"),
+				[]byte("def __getattr__(name):\n    return lambda *a, **k: None\n"), 0o644))
+		},
 		"planted disabled stage": func(h *codexAdapterHarness) {
 			require.NoError(t, os.Remove(filepath.Join(h.hooksDir, "context_suppress_posttool.py")))
 			delete(h.digests, "context_suppress_posttool.py")
@@ -990,37 +997,6 @@ func TestCodexAdapter_PostToolUseReverifiesChainStages(t *testing.T) {
 			assert.NotContains(t, got.stderr, "sk-proj-")
 		})
 	}
-}
-
-// CHAIN_SIBLINGS must name every file the chain can import, or a stage added
-// to posttool_chain.py later would be loaded without being re-hashed.
-func TestCodexAdapterChainSiblingsMatchTheChain(t *testing.T) {
-	chain := string(security.PostToolChainHook)
-	want := []string{"hook_io.py"}
-	for _, m := range regexp.MustCompile(`"([a-z_]+_posttool\.py)"`).FindAllStringSubmatch(chain, -1) {
-		if !slices.Contains(want, m[1]) {
-			want = append(want, m[1])
-		}
-	}
-	require.Contains(t, chain, "import hook_io")
-	// Any fullsend hook module imported by the chain or one of its stages is
-	// loaded from the hooks directory too, whatever its name.
-	installed := security.HookFiles(security.SandboxHookConfigFromHarness(&harness.Harness{}))
-	imports := regexp.MustCompile(`(?m)^\s*(?:import|from)\s+([a-z_]+)`)
-	sources := []string{chain}
-	for _, name := range want {
-		sources = append(sources, string(installed[name]))
-	}
-	for _, src := range sources {
-		for _, m := range imports.FindAllStringSubmatch(src, -1) {
-			if _, ok := installed[m[1]+".py"]; ok && !slices.Contains(want, m[1]+".py") {
-				want = append(want, m[1]+".py")
-			}
-		}
-	}
-	var got []string
-	require.NoError(t, json.Unmarshal([]byte(codexAdapterFunc(t, "list(m.CHAIN_SIBLINGS)")), &got))
-	assert.ElementsMatch(t, want, got)
 }
 
 // codexAdapterFunc loads the embedded adapter as a module and prints the

@@ -96,18 +96,10 @@ BUDGET_MARGIN_S = 2
 MIN_SCRIPT_S = 1
 _START = time.monotonic()
 
-# The PostToolUse chain, and every file it may import from the hooks
-# directory: its shared helper and the stages in posttool_chain.py's
-# _STAGE_FILES. It loads a stage whenever the file exists, so the adapter
-# re-hashes each one before spawning the chain. See verify_chain_siblings.
+# The PostToolUse chain imports from the hooks directory (hook_io and every
+# stage whose file exists), so before it is spawned the adapter checks the
+# whole directory, not just the chain. See verify_hooks_dir.
 CHAIN_SCRIPT = "posttool_chain.py"
-CHAIN_SIBLINGS = (
-    "hook_io.py",
-    "context_suppress_posttool.py",
-    "unicode_posttool.py",
-    "secret_redact_posttool.py",
-    "canary_posttool.py",
-)
 
 # codex caps hook strings well below this; the scripts already summarize.
 MAX_TEXT = 9000
@@ -286,30 +278,38 @@ def _sha256_regular_file(path: str) -> str:
             os.close(fd)
 
 
-def verify_chain_siblings() -> str | None:
-    """Check every file the chain may import, returning a block reason or None.
+def verify_hooks_dir() -> str | None:
+    """Check the hooks directory the way Run's guard does, returning a block
+    reason or None.
 
-    verify_script_digest re-hashes the script the adapter spawns, but the chain
-    imports its stages itself. A stage rewritten mid-iteration to return its
-    input unchanged would pass every check on the chain's own digest and let a
-    secret through. A sibling in the digest map must match it; one that is not
-    in the map (a disabled stage, which HookFiles omits) must not exist,
-    because the chain would load it.
+    verify_script_digest covers the script the adapter spawns, but the chain
+    imports from the directory itself: `import hook_io`, and every stage whose
+    file exists. A stage rewritten to find nothing, a stage file for a disabled
+    sanitizer, or a `hook_io/` package (which Python prefers over the verified
+    `hook_io.py` on the same path entry) would each change what the chain runs
+    while its own digest still matched. So every entry must be a regular file
+    fullsend installed, with its recorded digest, and nothing else may be there.
     """
     digests = expected_digests()
     if digests is None:
         return (
-            f"fullsend: {HOOK_DIGESTS_ENV} is missing or malformed, so the chain's "
-            "stages cannot be verified (fail closed)"
+            f"fullsend: {HOOK_DIGESTS_ENV} is missing or malformed, so the hooks "
+            "directory cannot be verified (fail closed)"
         )
-    for name in CHAIN_SIBLINGS:
-        path = os.path.join(HOOKS_DIR, name)
-        if name in digests:
-            error = verify_script_digest(name, path)
-            if error is not None:
-                return error
-        elif os.path.lexists(path):
-            return f"fullsend: hook {name} is not one fullsend installed (fail closed)"
+    try:
+        entries = sorted(os.listdir(HOOKS_DIR))
+    except OSError as err:
+        return f"fullsend: the hooks directory could not be listed (fail closed): {err}"
+    for name in entries:
+        if name not in digests:
+            return (
+                f"fullsend: {name} in the hooks directory is not one fullsend "
+                "installed (fail closed)"
+            )
+    for name in sorted(digests):
+        error = verify_script_digest(name, os.path.join(HOOKS_DIR, name))
+        if error is not None:
+            return error
     return None
 
 
@@ -379,7 +379,7 @@ def run_script(script: str, payload: dict[str, Any]) -> dict[str, Any]:
     path = os.path.join(HOOKS_DIR, script)
     digest_error = verify_script_digest(script, path)
     if digest_error is None and script == CHAIN_SCRIPT:
-        digest_error = verify_chain_siblings()
+        digest_error = verify_hooks_dir()
     if digest_error is not None:
         return {"block": True, "reason": digest_error, "output": None}
     timeout = script_timeout(time.monotonic() - _START)
@@ -513,8 +513,8 @@ def context_was_suppressed(output: Any) -> bool:
 
 def stage_enabled(script: str) -> bool:
     """Whether the runner installed the named chain stage (it is in the digest
-    map). This is not an integrity check: run_script re-hashes every stage
-    before each chain spawn (verify_chain_siblings)."""
+    map). This is not an integrity check: run_script verifies the whole hooks
+    directory before each chain spawn (verify_hooks_dir)."""
     digests = expected_digests()
     return digests is not None and script in digests
 
