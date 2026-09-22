@@ -70,21 +70,34 @@ func CleanupGitLabRoleIdentity(ctx context.Context, cfg GitLabRoleCleanupConfig)
 		}
 	}
 
-	revoked, err := revokeGitLabIdentityTokens(ctx, cfg.Tokens, cfg.Owner, cfg.Repo)
+	revoked, diag, err := revokeGitLabIdentityTokens(ctx, cfg.Tokens, cfg.Owner, cfg.Repo)
 	result.TokensRevoked = revoked
+	if diag != "" {
+		result.Diagnostics = append(result.Diagnostics, diag)
+	}
 	if err != nil {
 		errs = append(errs, err)
 	}
 	return result, errors.Join(errs...)
 }
 
-func revokeGitLabIdentityTokens(ctx context.Context, tokens ProjectAccessTokenClient, owner, repo string) (int, error) {
+// revokeGitLabIdentityTokens lists and revokes active fullsend identity
+// project access tokens. A permanently unavailable token inventory (the
+// project-access-token API is not offered on the plan, or the project no
+// longer exists) is reported as a diagnostic and treated as "nothing to
+// revoke" rather than a hard failure, since deletion can never converge
+// there. Transient/auth failures (5xx, rate limits, bad credentials)
+// still fail the call closed so the manifest entry is retried.
+func revokeGitLabIdentityTokens(ctx context.Context, tokens ProjectAccessTokenClient, owner, repo string) (int, string, error) {
 	if tokens == nil {
-		return 0, nil
+		return 0, "", nil
 	}
 	listed, err := tokens.ListProjectAccessTokens(ctx, owner, repo)
 	if err != nil {
-		return 0, fmt.Errorf("listing GitLab project tokens for uninstall: %w", err)
+		if forge.IsNotFound(err) || forge.IsForbidden(err) {
+			return 0, fmt.Sprintf("GitLab project access token inventory unavailable (%v); treating as nothing to revoke — verify manually if the plan or project no longer supports project access tokens", err), nil
+		}
+		return 0, "", fmt.Errorf("listing GitLab project tokens for uninstall: %w", err)
 	}
 	// Stable order so joined errors and TokensRevoked are deterministic.
 	sort.Slice(listed, func(i, j int) bool {
@@ -108,5 +121,5 @@ func revokeGitLabIdentityTokens(ctx context.Context, tokens ProjectAccessTokenCl
 		}
 		revoked++
 	}
-	return revoked, errors.Join(errs...)
+	return revoked, "", errors.Join(errs...)
 }

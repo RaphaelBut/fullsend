@@ -1411,7 +1411,7 @@ func runReposUninstall(ctx context.Context, opts *reposUninstallConfig, repoArgs
 			DryRun:         opts.dryRun,
 			Direct:         opts.direct,
 			MaxConcurrency: opts.concurrency,
-			GitLabTokens:   gitLabUninstallTokens(opts, clients, manifest, concreteRepos),
+			GitLabTokens:   gitLabUninstallTokens(opts, clients, printer, manifest, concreteRepos),
 		}
 
 		printer.Blank()

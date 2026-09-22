@@ -289,6 +289,9 @@ func uninstallRepoResources(ctx context.Context, cfg ResolvedConfig, direct bool
 		})
 		result.TokensRevoked = cleanup.TokensRevoked
 		result.VarsDeleted += cleanup.VarsDeleted
+		for _, d := range cleanup.Diagnostics {
+			progress(fullName, "cleanup", d)
+		}
 		identityErr = cleanupErr
 		rest := make([]string, 0, len(forgeVars))
 		for _, name := range forgeVars {

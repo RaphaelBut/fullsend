@@ -956,6 +956,45 @@ func TestUninstall_GitLabRoleIdentityRevokesTokensAndSecrets(t *testing.T) {
 	}
 }
 
+func TestUninstall_GitLabRoleIdentityPermanentTokenListFailureSurfacesDiagnostic(t *testing.T) {
+	client := newInstalledFakeGitLabClient("acme/api")
+	tokens := &fakeTokens{failList: forge.ErrForbidden}
+
+	var progressMsgs []string
+	progress := func(_, phase, msg string) {
+		if phase == "cleanup" {
+			progressMsgs = append(progressMsgs, msg)
+		}
+	}
+
+	results, err := Uninstall(context.Background(), UninstallConfig{
+		Manifest:       testGitLabManifest("acme/api"),
+		Repos:          []string{"acme/api"},
+		Direct:         true,
+		MaxConcurrency: 4,
+		GitLabTokens:   tokens,
+	}, newTestClientFactory(client), uninstallCommitFn(client), progress)
+	if err != nil {
+		t.Fatalf("Uninstall() error = %v", err)
+	}
+	r := results[0]
+	if !r.Success {
+		t.Fatalf("Success = false, want true when the token list failure is permanent; Error = %v", r.Error)
+	}
+	if r.TokensRevoked != 0 {
+		t.Errorf("TokensRevoked = %d, want 0", r.TokensRevoked)
+	}
+	found := false
+	for _, msg := range progressMsgs {
+		if strings.Contains(msg, "treating as nothing to revoke") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("progress messages = %v, want a diagnostic about the unavailable token inventory", progressMsgs)
+	}
+}
+
 func TestUninstall_GitLabRoleIdentityRevokeFailureKeepsError(t *testing.T) {
 	client := newInstalledFakeGitLabClient("acme/api")
 	tokens := &fakeTokens{failRevoke: fmt.Errorf("busy")}

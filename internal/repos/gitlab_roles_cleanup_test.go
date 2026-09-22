@@ -134,6 +134,32 @@ func TestCleanupGitLabRoleIdentity_TokenListFailureFailsClosed(t *testing.T) {
 	assert.Equal(t, 0, result.TokensRevoked)
 }
 
+func TestCleanupGitLabRoleIdentity_PermanentTokenListFailureIsNotFatal(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"forbidden", fmt.Errorf("plan does not support this feature: %w", forge.ErrForbidden)},
+		{"not found", fmt.Errorf("project gone: %w", forge.ErrNotFound)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := forge.NewFakeClient()
+			seedEnforcedIdentity(t, fc)
+			tokens := &fakeTokens{failList: tc.err}
+
+			result, err := CleanupGitLabRoleIdentity(context.Background(), GitLabRoleCleanupConfig{
+				Owner: "group", Repo: "project", Client: fc, Tokens: tokens,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, 0, result.TokensRevoked)
+			assert.Greater(t, result.VarsDeleted, 0)
+			assert.Empty(t, fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+			assert.NotEmpty(t, result.Diagnostics)
+		})
+	}
+}
+
 func TestCleanupGitLabRoleIdentity_StableRevokeOrderForDuplicateNames(t *testing.T) {
 	t.Parallel()
 	fc := forge.NewFakeClient()

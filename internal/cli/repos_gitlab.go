@@ -731,68 +731,13 @@ func printGitLabRoleProvision(printer *ui.Printer, repoFullName string, result r
 	}
 }
 
-// cleanupGitLabRoleTokens revokes active built-in and custom role
-// project access tokens. The shared fullsend-bot token is left to
-// cleanupGitLabBotToken.
-func cleanupGitLabRoleTokens(ctx context.Context, glClient *gitlab.LiveClient, printer *ui.Printer, owner, repo string) error {
-	if glClient == nil {
-		return nil
-	}
-	printer.StepStart("Revoking GitLab role access tokens")
-	tokens, err := glClient.ListProjectAccessTokens(ctx, owner, repo)
-	if err != nil {
-		printer.StepWarn(fmt.Sprintf("Could not list project access tokens: %v", err))
-		return nil
-	}
-	var revoked int
-	for _, tok := range tokens {
-		if !tok.Active || !gitlabroles.IsRoleProjectTokenName(tok.Name) {
-			continue
-		}
-		if err := glClient.RevokeProjectAccessToken(ctx, owner, repo, tok.ID); err != nil {
-			printer.StepWarn(fmt.Sprintf("Failed to revoke token %q (ID %d): %v", tok.Name, tok.ID, err))
-			continue
-		}
-		revoked++
-	}
-	printer.StepDone(fmt.Sprintf("Revoked %d GitLab role access token(s)", revoked))
-	return nil
-}
-
-// cleanupGitLabBotToken revokes any active fullsend bot project access
-// tokens from a GitLab project.
-func cleanupGitLabBotToken(ctx context.Context, glClient *gitlab.LiveClient, printer *ui.Printer, owner, repo string) error {
-	if glClient == nil {
-		return nil
-	}
-	printer.StepStart("Revoking bot access token")
-	tokens, err := glClient.ListProjectAccessTokens(ctx, owner, repo)
-	if err != nil {
-		printer.StepWarn(fmt.Sprintf("Could not list project access tokens: %v", err))
-		return nil
-	}
-	revoked := false
-	for _, t := range tokens {
-		if t.Name == gitlabBotTokenName && t.Active {
-			if err := glClient.RevokeProjectAccessToken(ctx, owner, repo, t.ID); err != nil {
-				printer.StepWarn(fmt.Sprintf("Failed to revoke token %q (ID %d): %v", t.Name, t.ID, err))
-			} else {
-				revoked = true
-			}
-		}
-	}
-	if revoked {
-		printer.StepDone("Revoked bot access token")
-	} else {
-		printer.StepDone("No active bot access token found")
-	}
-	return nil
-}
-
 // gitLabUninstallTokens returns the project-token inventory used by
 // repos.Uninstall to revoke GitLab identity PATs. Test hooks win; live
 // GitLab clients are wrapped when at least one targeted repo is GitLab.
-func gitLabUninstallTokens(opts *reposUninstallConfig, clients repos.ForgeClientFactory, manifest *repos.Manifest, repoNames []string) repos.ProjectAccessTokenClient {
+// An unobtainable live client for a GitLab-targeted manifest is a
+// silent-success risk (PAT revocation is skipped entirely), so it is
+// reported via printer.StepWarn rather than returned without comment.
+func gitLabUninstallTokens(opts *reposUninstallConfig, clients repos.ForgeClientFactory, printer *ui.Printer, manifest *repos.Manifest, repoNames []string) repos.ProjectAccessTokenClient {
 	if opts != nil && opts.testGitLabTokens != nil {
 		return opts.testGitLabTokens
 	}
@@ -810,10 +755,12 @@ func gitLabUninstallTokens(opts *reposUninstallConfig, clients repos.ForgeClient
 		}
 		fc, err := clients.ConfigFor(repos.ForgeGitLab)
 		if err != nil {
+			printer.StepWarn(fmt.Sprintf("Could not obtain a GitLab client for project access token revocation: %v — token revocation will be skipped for GitLab repos in this run", err))
 			return nil
 		}
 		glClient, ok := fc.Client.(*gitlab.LiveClient)
 		if !ok {
+			printer.StepWarn("GitLab client is not a live API client — project access token revocation will be skipped for GitLab repos in this run")
 			return nil
 		}
 		return gitlabTokenAdapter{c: glClient}
