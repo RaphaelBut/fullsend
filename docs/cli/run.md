@@ -298,6 +298,18 @@ On `--forge gitlab` (or when `GITLAB_CI=true`), `fullsend run` does not mint a G
 
 See [GitLab Role-Credential Contract](../contributing/gitlab-role-credentials.md).
 
+## GitHub Packages credentials
+
+On GitHub Actions, `fullsend run` copies the pre-mint `GH_TOKEN` (the job's workflow token) to
+`GH_WORKFLOW_TOKEN` before replacing `GH_TOKEN` with the minted App token. Provider
+credentials may expand `${GH_WORKFLOW_TOKEN}`; every other harness `${}` site refuses it, and
+pre/post/validation child environments never receive it. Outside Actions the variable is not
+derived from a local PAT — a caller may set it explicitly. `GH_TOKEN` / `PUSH_TOKEN` still receive
+the minted App identity.
+
+Repo-level setup (provider, profile, `~/.npmrc`, code/fix overlays):
+[Private registries and GitHub Packages](../guides/user/customizing-agents.md#private-registries-and-github-packages).
+
 ## Related
 
 - [Running Agents Locally](../guides/user/running-agents-locally.md) for a step-by-step walkthrough
