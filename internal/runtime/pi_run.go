@@ -70,7 +70,8 @@ const (
 //	haiku:  claude-haiku-4-5
 //
 // The arrows are what to raise a default to, not a history. An id the
-// project does not serve fails the run rather than degrading (#7026).
+// project does not serve fails the run unless the alias request carries
+// FULLSEND_FALLBACK_MODELS, which Run then tries in order (#7026).
 var piModelAliases = map[string]string{
 	"opus":   "claude-opus-4-6",
 	"sonnet": "claude-sonnet-4-6",
