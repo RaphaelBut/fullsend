@@ -1258,7 +1258,8 @@ type reposUninstallConfig struct {
 	uninstallOnly bool
 	gitlabToken   string
 
-	testClient forge.Client
+	testClient       forge.Client
+	testGitLabTokens repos.ProjectAccessTokenClient
 }
 
 func newReposUninstallCmd() *cobra.Command {
@@ -1365,9 +1366,11 @@ func runReposUninstall(ctx context.Context, opts *reposUninstallConfig, repoArgs
 	}
 
 	progressFn := func(repo, phase, msg string) {
-		switch phase {
-		case "done", "manifest":
+		switch {
+		case phase == "done" || phase == "manifest":
 			printer.StepDone(fmt.Sprintf("[%s] %s", repo, msg))
+		case strings.HasPrefix(msg, "Warning:"):
+			printer.StepWarn(fmt.Sprintf("[%s] %s", repo, msg))
 		default:
 			printer.StepInfo(fmt.Sprintf("[%s] %s", repo, msg))
 		}
@@ -1410,6 +1413,7 @@ func runReposUninstall(ctx context.Context, opts *reposUninstallConfig, repoArgs
 			DryRun:         opts.dryRun,
 			Direct:         opts.direct,
 			MaxConcurrency: opts.concurrency,
+			GitLabTokens:   gitLabUninstallTokens(opts, clients, printer, manifest, concreteRepos),
 		}
 
 		printer.Blank()
@@ -1433,7 +1437,10 @@ func runReposUninstall(ctx context.Context, opts *reposUninstallConfig, repoArgs
 			}
 		}
 
-		// GitLab post-uninstall: clean up pipeline schedules and bot tokens.
+		// GitLab post-uninstall: clean up pipeline schedules. Role and
+		// shared-bot project access tokens are revoked inside Uninstall
+		// when GitLabTokens is set, and a revocation failure fails the
+		// uninstall so the manifest entry remains for retry.
 		if !opts.dryRun {
 			for _, r := range results {
 				if !r.Success {
@@ -1453,14 +1460,6 @@ func runReposUninstall(ctx context.Context, opts *reposUninstallConfig, repoArgs
 					continue
 				}
 				_ = cleanupGitLabPipelineSchedules(ctx, fc.Client, printer, r.Owner, r.Repo)
-
-				if glClient, ok := fc.Client.(*gl.LiveClient); ok {
-					_ = cleanupGitLabBotToken(ctx, glClient, printer, r.Owner, r.Repo)
-					_ = cleanupGitLabRoleTokens(ctx, glClient, printer, r.Owner, r.Repo)
-				} else {
-					printer.StepWarn(fmt.Sprintf("[%s] GitLab client type assertion failed — bot and role token cleanup skipped", repoFullName))
-				}
-
 			}
 		}
 	} else {

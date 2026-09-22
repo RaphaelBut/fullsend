@@ -574,87 +574,6 @@ func TestHealGitLabResourceGroups(t *testing.T) {
 	})
 }
 
-func TestCleanupGitLabBotToken(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("nil glClient is a no-op", func(t *testing.T) {
-		var buf bytes.Buffer
-		printer := ui.New(&buf)
-
-		err := cleanupGitLabBotToken(ctx, nil, printer, "group", "project")
-		require.NoError(t, err)
-	})
-
-	t.Run("revokes active fullsend-bot tokens", func(t *testing.T) {
-		var revokedIDs []int
-		mux := http.NewServeMux()
-		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode([]map[string]any{
-				{"id": 10, "name": "fullsend-bot", "active": true},
-				{"id": 11, "name": "other-token", "active": true},
-				{"id": 12, "name": "fullsend-bot", "active": false},
-			})
-		})
-		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens/10", func(w http.ResponseWriter, r *http.Request) {
-			revokedIDs = append(revokedIDs, 10)
-			w.WriteHeader(http.StatusNoContent)
-		})
-		srv := httptest.NewServer(mux)
-		defer srv.Close()
-
-		glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
-		require.NoError(t, err)
-
-		var buf bytes.Buffer
-		printer := ui.New(&buf)
-
-		err = cleanupGitLabBotToken(ctx, glClient, printer, "group", "project")
-		require.NoError(t, err)
-		assert.Equal(t, []int{10}, revokedIDs)
-		assert.Contains(t, buf.String(), "Revoked bot access token")
-	})
-
-	t.Run("no active tokens", func(t *testing.T) {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode([]map[string]any{})
-		})
-		srv := httptest.NewServer(mux)
-		defer srv.Close()
-
-		glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
-		require.NoError(t, err)
-
-		var buf bytes.Buffer
-		printer := ui.New(&buf)
-
-		err = cleanupGitLabBotToken(ctx, glClient, printer, "group", "project")
-		require.NoError(t, err)
-		assert.Contains(t, buf.String(), "No active bot access token found")
-	})
-
-	t.Run("list error is non-fatal", func(t *testing.T) {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusForbidden)
-		})
-		srv := httptest.NewServer(mux)
-		defer srv.Close()
-
-		glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
-		require.NoError(t, err)
-
-		var buf bytes.Buffer
-		printer := ui.New(&buf)
-
-		err = cleanupGitLabBotToken(ctx, glClient, printer, "group", "project")
-		require.NoError(t, err)
-		assert.Contains(t, buf.String(), "Could not list project access tokens")
-	})
-}
-
 // Poll-state provisioning itself (legacy-var migration, empty-baseline
 // seeding, skip-existing-branch) is covered directly against
 // SeedGitLabPollStateBranches / EnsureDispatchSecret in
@@ -1253,63 +1172,6 @@ func TestMaybeProvisionGitLabRoles_ExistingDisabledPromotesToMigrating(t *testin
 	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken], "partial enrollment must not recreate or drop the shared credential")
 }
 
-func TestCleanupGitLabRoleTokens(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("nil client is a no-op", func(t *testing.T) {
-		var buf bytes.Buffer
-		printer := ui.New(&buf)
-		require.NoError(t, cleanupGitLabRoleTokens(ctx, nil, printer, "group", "project"))
-	})
-
-	t.Run("revokes role tokens not shared bot", func(t *testing.T) {
-		var revokedIDs []int
-		mux := http.NewServeMux()
-		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode([]map[string]any{
-				{"id": 1, "name": "fullsend-bot", "active": true},
-				{"id": 2, "name": "fullsend-poller", "active": true},
-				{"id": 3, "name": "fullsend-role-scanner", "active": true},
-				{"id": 4, "name": "other-token", "active": true},
-			})
-		})
-		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens/2", func(w http.ResponseWriter, r *http.Request) {
-			revokedIDs = append(revokedIDs, 2)
-			w.WriteHeader(http.StatusNoContent)
-		})
-		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens/3", func(w http.ResponseWriter, r *http.Request) {
-			revokedIDs = append(revokedIDs, 3)
-			w.WriteHeader(http.StatusNoContent)
-		})
-		srv := httptest.NewServer(mux)
-		defer srv.Close()
-
-		glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
-		require.NoError(t, err)
-		var buf bytes.Buffer
-		printer := ui.New(&buf)
-		require.NoError(t, cleanupGitLabRoleTokens(ctx, glClient, printer, "group", "project"))
-		assert.ElementsMatch(t, []int{2, 3}, revokedIDs)
-		assert.Contains(t, buf.String(), "Revoked 2 GitLab role access token")
-		assert.NotContains(t, buf.String(), "glpat-")
-	})
-
-	t.Run("list error is non-fatal", func(t *testing.T) {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/api/v4/projects/group%2Fproject/access_tokens", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusForbidden)
-		})
-		srv := httptest.NewServer(mux)
-		defer srv.Close()
-		glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
-		require.NoError(t, err)
-		var buf bytes.Buffer
-		require.NoError(t, cleanupGitLabRoleTokens(ctx, glClient, ui.New(&buf), "group", "project"))
-		assert.Contains(t, buf.String(), "Could not list project access tokens")
-	})
-}
-
 func TestPrepareGitLabRoleFlagsRotateNames(t *testing.T) {
 	opts := &reposInstallConfig{rotateGitLabRoleNames: []string{"Poller", " scanner "}}
 	require.NoError(t, prepareGitLabRoleFlags(opts))
@@ -1436,5 +1298,58 @@ func TestAnnotateGitLabRoleLifecycleDoesNotDoubleCountDrifted(t *testing.T) {
 		annotateGitLabRoleLifecycle(ctx, clients, result)
 		require.Len(t, result.Repos[0].Drifts, 1)
 		assert.Equal(t, 1, result.Summary.Drifted, "no-drift to drift transition must be counted exactly once")
+	})
+}
+
+func TestGitLabUninstallTokens(t *testing.T) {
+	manifest := &repos.Manifest{
+		Version: 1,
+		GitLab: &repos.PlatformConfig{
+			Repos: []repos.RepoEntry{{Name: "group/project"}},
+		},
+	}
+	printer := ui.New(&bytes.Buffer{})
+
+	t.Run("test hook wins", func(t *testing.T) {
+		hook := cliCutoverTokens{}
+		got := gitLabUninstallTokens(&reposUninstallConfig{testGitLabTokens: hook}, nil, printer, manifest, []string{"group/project"})
+		assert.Equal(t, hook, got)
+	})
+
+	t.Run("fake client is not live inventory warns and returns nil", func(t *testing.T) {
+		var buf bytes.Buffer
+		got := gitLabUninstallTokens(&reposUninstallConfig{}, newSingleClientFactory(forge.NewFakeClient()), ui.New(&buf), manifest, []string{"group/project"})
+		assert.Nil(t, got)
+		assert.Contains(t, buf.String(), "not a live API client")
+	})
+
+	t.Run("github-only repos skip inventory", func(t *testing.T) {
+		gh := &repos.Manifest{
+			Version: 1,
+			GitHub: &repos.PlatformConfig{
+				Repos: []repos.RepoEntry{{Name: "acme/api"}},
+			},
+		}
+		got := gitLabUninstallTokens(&reposUninstallConfig{}, newSingleClientFactory(forge.NewFakeClient()), printer, gh, []string{"acme/api"})
+		assert.Nil(t, got)
+	})
+
+	t.Run("nil factory or manifest", func(t *testing.T) {
+		assert.Nil(t, gitLabUninstallTokens(&reposUninstallConfig{}, nil, printer, manifest, []string{"group/project"}))
+		assert.Nil(t, gitLabUninstallTokens(&reposUninstallConfig{}, newSingleClientFactory(forge.NewFakeClient()), printer, nil, []string{"group/project"}))
+	})
+
+	t.Run("skips names without a slash", func(t *testing.T) {
+		got := gitLabUninstallTokens(&reposUninstallConfig{}, newSingleClientFactory(forge.NewFakeClient()), printer, manifest, []string{"not-a-repo"})
+		assert.Nil(t, got)
+	})
+
+	t.Run("live gitlab client is wrapped", func(t *testing.T) {
+		glClient, err := gitlab.New("test-token", gitlab.WithBaseURL("http://127.0.0.1:1"))
+		require.NoError(t, err)
+		got := gitLabUninstallTokens(&reposUninstallConfig{}, newSingleClientFactory(glClient), printer, manifest, []string{"group/project"})
+		require.NotNil(t, got)
+		_, ok := got.(gitlabTokenAdapter)
+		assert.True(t, ok)
 	})
 }
