@@ -904,8 +904,9 @@ func TestWaitForHarnessAgent_TimeoutIncludesDiagnostics(t *testing.T) {
 }
 
 // TestWaitForHarnessAgent_BothRunsScheduleAgent_OneFailsIsFatal tests
-// that when both sibling runs schedule the same agent and one fails,
-// fail-fast correctly triggers (the failure is real for this agent).
+// that when both sibling runs schedule the same agent and both conclude
+// failure, fail-fast still triggers: there is no later pending or
+// successful run to supersede the failure.
 func TestWaitForHarnessAgent_BothRunsScheduleAgent_OneFailsIsFatal(t *testing.T) {
 	t.Parallel()
 
@@ -920,15 +921,112 @@ func TestWaitForHarnessAgent_BothRunsScheduleAgent_OneFailsIsFatal(t *testing.T)
 				HTMLURL:   "https://github.com/org/repo/actions/runs/100",
 			},
 			{
+				ID: 200, Status: "completed", Conclusion: "failure",
+				CreatedAt: "2026-01-02T00:01:00Z",
+				HTMLURL:   "https://github.com/org/repo/actions/runs/200",
+			},
+		},
+	}
+	// Both runs scheduled the agent's job and both failed.
+	client.WorkflowRunJobs = map[int][]forge.WorkflowJob{
+		100: {{ID: 1, Name: "dispatch / Harness run (triage)", Status: "completed", Conclusion: "failure"}},
+		200: {{ID: 2, Name: "dispatch / Harness run (triage)", Status: "completed", Conclusion: "failure"}},
+	}
+
+	d := newTestDriver(client)
+	run, err := d.WaitForHarnessAgent(context.Background(), "org", "repo", "triage", after)
+	require.Error(t, err)
+	assert.Nil(t, run)
+	assert.Contains(t, err.Error(), "concluded with \"failure\" before producing artifact")
+}
+
+// TestWaitForHarnessAgent_FailedRunSupersededByLaterSuccess covers the
+// #7574 dual-dispatch race: a workflow run for an agent concludes
+// "failure" (having scheduled the agent's harness job), and a later run
+// for the same agent subsequently succeeds and uploads its artifact.
+// Fail-fast must not treat the earlier failure as authoritative.
+func TestWaitForHarnessAgent_FailedRunSupersededByLaterSuccess(t *testing.T) {
+	t.Parallel()
+
+	after := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fake := forge.NewFakeClient()
+	fake.WorkflowRunsList = map[string][]forge.WorkflowRun{
+		"org/repo/fullsend.yaml": {
+			{
+				ID: 100, Status: "completed", Conclusion: "failure",
+				CreatedAt: "2026-01-02T00:00:00Z",
+				HTMLURL:   "https://github.com/org/repo/actions/runs/100",
+			},
+			{
 				ID: 200, Status: "in_progress",
 				CreatedAt: "2026-01-02T00:01:00Z",
 			},
 		},
 	}
-	// Both runs scheduled the agent's job; run 100 failed.
+	// GetWorkflowRun looks up by ID across WorkflowRuns values; the
+	// later poll's artifact points at run 200, which has already
+	// succeeded by then.
+	fake.WorkflowRuns = map[string]*forge.WorkflowRun{
+		"org/repo/failed": {
+			ID: 100, Status: "completed", Conclusion: "failure",
+			CreatedAt: "2026-01-02T00:00:00Z",
+			HTMLURL:   "https://github.com/org/repo/actions/runs/100",
+		},
+		"org/repo/success": {
+			ID: 200, Status: "completed", Conclusion: "success",
+			CreatedAt: "2026-01-02T00:01:00Z",
+		},
+	}
+	fake.WorkflowRunJobs = map[int][]forge.WorkflowJob{
+		100: {{ID: 1, Name: "dispatch / Harness run (reaction-ping)", Status: "completed", Conclusion: "failure"}},
+		200: {{ID: 2, Name: "dispatch / Harness run (reaction-ping)", Status: "in_progress"}},
+	}
+
+	client := &settlingArtifactsClient{
+		FakeClient: fake,
+		callsLeft:  1,
+		// First poll: no artifact, so the fail-fast scan would fire
+		// on run 100 without the supersede check.
+		beforeArts: nil,
+		afterArts: []forge.RepositoryArtifact{
+			{ID: 20, Name: "fullsend-reaction-ping", CreatedAt: "2026-01-02T00:02:00Z", WorkflowRunID: 200},
+		},
+	}
+
+	d := &Driver{Client: client, afterFunc: instantAfter}
+	run, err := d.WaitForHarnessAgent(context.Background(), "org", "repo", "reaction-ping", after)
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	assert.Equal(t, 200, run.ID)
+}
+
+// TestWaitForHarnessAgent_NewerSiblingWithoutAgentJobDoesNotSuppressFailFast
+// verifies that a later run that did not schedule this agent does not
+// keep polling past a genuine failure of this agent's job.
+func TestWaitForHarnessAgent_NewerSiblingWithoutAgentJobDoesNotSuppressFailFast(t *testing.T) {
+	t.Parallel()
+
+	after := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	client := forge.NewFakeClient()
+	client.WorkflowRunsList = map[string][]forge.WorkflowRun{
+		"org/repo/fullsend.yaml": {
+			{
+				ID: 100, Status: "completed", Conclusion: "failure",
+				CreatedAt: "2026-01-02T00:00:00Z",
+				HTMLURL:   "https://github.com/org/repo/actions/runs/100",
+			},
+			{
+				ID: 200, Status: "in_progress",
+				CreatedAt: "2026-01-02T00:01:00Z",
+			},
+		},
+	}
 	client.WorkflowRunJobs = map[int][]forge.WorkflowJob{
 		100: {{ID: 1, Name: "dispatch / Harness run (triage)", Status: "completed", Conclusion: "failure"}},
-		200: {{ID: 2, Name: "dispatch / Harness run (triage)", Status: "in_progress"}},
+		200: {
+			{ID: 2, Name: "dispatch / Route", Status: "completed", Conclusion: "success"},
+			{ID: 3, Name: "dispatch / Harness run (review)", Status: "in_progress"},
+		},
 	}
 
 	d := newTestDriver(client)
@@ -1190,6 +1288,87 @@ func TestIsConcurrencySuperseded(t *testing.T) {
 		assert.Equal(t, tt.want, isConcurrencySuperseded(tt.conclusion),
 			"isConcurrencySuperseded(%q)", tt.conclusion)
 	}
+}
+
+func TestWorkflowRunNewer(t *testing.T) {
+	t.Parallel()
+
+	older := forge.WorkflowRun{ID: 100, CreatedAt: "2026-01-02T00:00:00Z"}
+	newer := forge.WorkflowRun{ID: 200, CreatedAt: "2026-01-02T00:01:00Z"}
+	sameTimeHigherID := forge.WorkflowRun{ID: 201, CreatedAt: "2026-01-02T00:00:00Z"}
+	unparseableHigh := forge.WorkflowRun{ID: 300, CreatedAt: "not-a-time"}
+	unparseableLow := forge.WorkflowRun{ID: 50, CreatedAt: "also-bad"}
+
+	assert.True(t, workflowRunNewer(newer, older))
+	assert.False(t, workflowRunNewer(older, newer))
+	assert.False(t, workflowRunNewer(older, older))
+	assert.True(t, workflowRunNewer(sameTimeHigherID, older), "equal CreatedAt falls back to ID")
+	assert.False(t, workflowRunNewer(older, sameTimeHigherID))
+	assert.True(t, workflowRunNewer(unparseableHigh, unparseableLow), "unparseable CreatedAt falls back to ID")
+	assert.False(t, workflowRunNewer(unparseableLow, unparseableHigh))
+}
+
+func TestHasSupersedingAgentRun(t *testing.T) {
+	t.Parallel()
+
+	failed := forge.WorkflowRun{
+		ID: 100, Status: "completed", Conclusion: "failure",
+		CreatedAt: "2026-01-02T00:00:00Z",
+	}
+	newerInProgress := forge.WorkflowRun{
+		ID: 200, Status: "in_progress",
+		CreatedAt: "2026-01-02T00:01:00Z",
+	}
+	newerSuccess := forge.WorkflowRun{
+		ID: 201, Status: "completed", Conclusion: "success",
+		CreatedAt: "2026-01-02T00:02:00Z",
+	}
+	newerFailure := forge.WorkflowRun{
+		ID: 202, Status: "completed", Conclusion: "failure",
+		CreatedAt: "2026-01-02T00:03:00Z",
+	}
+	olderInProgress := forge.WorkflowRun{
+		ID: 50, Status: "in_progress",
+		CreatedAt: "2026-01-01T23:00:00Z",
+	}
+	newerOtherAgent := forge.WorkflowRun{
+		ID: 203, Status: "in_progress",
+		CreatedAt: "2026-01-02T00:04:00Z",
+	}
+
+	client := forge.NewFakeClient()
+	client.WorkflowRunJobs = map[int][]forge.WorkflowJob{
+		100: {{ID: 1, Name: "dispatch / Harness run (triage)", Status: "completed", Conclusion: "failure"}},
+		200: {{ID: 2, Name: "dispatch / Harness run (triage)", Status: "in_progress"}},
+		201: {{ID: 3, Name: "dispatch / Harness run (triage)", Status: "completed", Conclusion: "success"}},
+		202: {{ID: 4, Name: "dispatch / Harness run (triage)", Status: "completed", Conclusion: "failure"}},
+		50:  {{ID: 5, Name: "dispatch / Harness run (triage)", Status: "in_progress"}},
+		203: {{ID: 6, Name: "dispatch / Harness run (review)", Status: "in_progress"}},
+	}
+	d := newTestDriver(client)
+	var lookupErrs pollErrors
+
+	assert.True(t, d.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
+		[]forge.WorkflowRun{failed, newerInProgress}, &lookupErrs), "newer in-progress run for the same agent")
+	assert.True(t, d.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
+		[]forge.WorkflowRun{failed, newerSuccess}, &lookupErrs), "newer successful run for the same agent")
+	assert.False(t, d.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
+		[]forge.WorkflowRun{failed, newerFailure}, &lookupErrs), "newer failure is not a supersede")
+	assert.False(t, d.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
+		[]forge.WorkflowRun{olderInProgress, failed}, &lookupErrs), "older in-progress run is not newer")
+	assert.False(t, d.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
+		[]forge.WorkflowRun{failed, newerOtherAgent}, &lookupErrs), "newer run for a different agent")
+	assert.False(t, d.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
+		[]forge.WorkflowRun{failed}, &lookupErrs), "no other runs")
+
+	errClient := forge.NewFakeClient()
+	errClient.Errors["ListWorkflowRunJobs"] = fmt.Errorf("jobs API error")
+	errDriver := newTestDriver(errClient)
+	var lookupOnErr pollErrors
+	assert.False(t, errDriver.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
+		[]forge.WorkflowRun{failed, newerInProgress}, &lookupOnErr),
+		"job-list error on the newer run is not a supersede")
+	assert.Greater(t, lookupOnErr.failed, 0)
 }
 
 func TestAssertNoHarnessAgentArtifact_IgnoresOtherAgentJobs(t *testing.T) {

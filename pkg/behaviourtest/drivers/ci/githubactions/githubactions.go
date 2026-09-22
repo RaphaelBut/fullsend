@@ -818,7 +818,10 @@ func (d *Driver) runHasAgentJob(ctx context.Context, owner, repo string, runID i
 
 // WaitForHarnessAgent waits for a successful harness-run workflow job for
 // the named agent. It fails fast only when a workflow run that contains the
-// agent's "Harness run (<agent>)" job reaches a terminal failure conclusion.
+// agent's "Harness run (<agent>)" job reaches a terminal failure conclusion
+// and no newer run for the same agent is still pending or has already
+// succeeded. A dual-dispatch race can leave an earlier sibling concluding
+// failure while a later run of the same agent goes on to succeed (#7574).
 // Sibling workflow runs that do not schedule the agent's job are ignored.
 //
 // Listing failures never end the wait — the loop keeps polling — but they
@@ -888,7 +891,8 @@ func (d *Driver) harnessPollOnce(ctx context.Context, remaining time.Duration, o
 
 	// Fail-fast: check recent harness runs for terminal failures,
 	// but only attribute failure to runs that actually scheduled
-	// this agent's harness job.
+	// this agent's harness job. A newer pending or successful run
+	// for the same agent supersedes an earlier failure (#7574).
 	recentRuns, err := d.listHarnessRunsAfter(ctx, owner, repo, after)
 	runsErrs.record(ctx, err)
 	for _, r := range recentRuns {
@@ -897,12 +901,54 @@ func (d *Driver) harnessPollOnce(ctx context.Context, remaining time.Duration, o
 		}
 		hasJob, _, err := d.runHasAgentJob(ctx, owner, repo, r.ID, agent)
 		lookupErrs.record(ctx, err)
-		if hasJob {
-			return nil, true, fmt.Errorf("harness agent %q: workflow run %d concluded with %q before producing artifact (url=%s)",
-				agent, r.ID, r.Conclusion, r.HTMLURL)
+		if !hasJob {
+			continue
 		}
+		if d.hasSupersedingAgentRun(ctx, owner, repo, agent, r, recentRuns, lookupErrs) {
+			continue
+		}
+		return nil, true, fmt.Errorf("harness agent %q: workflow run %d concluded with %q before producing artifact (url=%s)",
+			agent, r.ID, r.Conclusion, r.HTMLURL)
 	}
 	return nil, false, nil
+}
+
+// workflowRunNewer reports whether a was created after b. CreatedAt is
+// compared when both parse as RFC3339; otherwise run ID is the tiebreak
+// (GitHub run IDs are monotonic).
+func workflowRunNewer(a, b forge.WorkflowRun) bool {
+	at, aErr := time.Parse(time.RFC3339, a.CreatedAt)
+	bt, bErr := time.Parse(time.RFC3339, b.CreatedAt)
+	if aErr == nil && bErr == nil && !at.Equal(bt) {
+		return at.After(bt)
+	}
+	return a.ID > b.ID
+}
+
+// hasSupersedingAgentRun reports whether recentRuns contains a run newer
+// than failed that scheduled agent's harness job and is still pending or
+// has already succeeded. Dual-dispatch can leave an earlier sibling
+// concluding failure while a later run of the same agent is still going
+// or has already succeeded; fail-fast must not treat the earlier failure
+// as authoritative (#7574).
+func (d *Driver) hasSupersedingAgentRun(ctx context.Context, owner, repo, agent string, failed forge.WorkflowRun, recentRuns []forge.WorkflowRun, lookupErrs *pollErrors) bool {
+	for _, other := range recentRuns {
+		if other.ID == failed.ID || !workflowRunNewer(other, failed) {
+			continue
+		}
+		if other.Status == "completed" && other.Conclusion != "success" {
+			continue
+		}
+		hasJob, _, err := d.runHasAgentJob(ctx, owner, repo, other.ID, agent)
+		lookupErrs.record(ctx, err)
+		if err != nil {
+			continue
+		}
+		if hasJob {
+			return true
+		}
+	}
+	return false
 }
 
 // WaitForFailedHarnessAgent waits for the named agent's harness run to
