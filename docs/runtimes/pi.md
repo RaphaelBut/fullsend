@@ -87,7 +87,9 @@ models:
 **If it goes wrong.** A key or value the block does not accept stops `fullsend run` before the
 sandbox is created, naming the key (`models.aliases: unknown alias key "grok"`). A model your
 project cannot serve is not caught here: aliased models (opus, sonnet, etc.) fall back through
-`FULLSEND_FALLBACK_MODELS` on Vertex 404/403; pinned ids fail at the first model call.
+`FULLSEND_FALLBACK_MODELS` on Vertex 404/403; pinned ids fail at the first model call. A fallback
+must resolve to the same pi provider as the primary model; others are ignored with a warning.
+Sub-agent children get no fallback: each is launched with the one model its alias maps to.
 
 ### Each provider has its own GCP project
 
@@ -125,7 +127,7 @@ endpoints answer `FAILED_PRECONDITION` — so region variables are deliberately 
 | Extra knobs | `FULLSEND_PI_PROVIDER` (prefix for bare ids), `FULLSEND_PI_BASH_ALLOWLIST=enforce`, `FULLSEND_PI_SUBAGENT_THINKING` |
 | Plugins | The pi-format entries of the harness's `plugins:` list, uploaded and loaded with `-e` after a tree-hash preflight ([Plugins](#plugins-pi-extensions)) |
 | Sub-agents | `Agent` (alias `Task`) via a fullsend extension: children are `pi` processes with the same hooks, providers and tool allowlist ([Sub-agents](#sub-agents)) |
-| Fallback chains | Alias requests: tried in order on Vertex 404/403; pinned ids: fail loudly |
+| Fallback chains | Top-level run only: alias requests tried in order on Vertex 404/403, same provider only; pinned ids and sub-agent children fail loudly |
 | Not supported | Claude-format plugins (named and skipped), Bedrock/Azure providers |
 
 ## Running it locally
