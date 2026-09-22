@@ -61,6 +61,7 @@ import contextlib
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -110,6 +111,10 @@ CHAIN_SIBLINGS = (
 
 # codex caps hook strings well below this; the scripts already summarize.
 MAX_TEXT = 9000
+
+# Hook scripts are tens of kilobytes. A file larger than this is not one
+# fullsend installed, and reading a huge one could spend the handler budget.
+MAX_SCRIPT_BYTES = 1 << 20
 
 PHASE_PRE = "PreToolUse"
 PHASE_POST = "PostToolUse"
@@ -246,8 +251,7 @@ def verify_script_digest(script: str, path: str) -> str | None:
     if expected is None:
         return f"fullsend: hook {script} is not one fullsend installed (fail closed)"
     try:
-        with open(path, "rb") as handle:
-            actual = hashlib.sha256(handle.read()).hexdigest()
+        actual = _sha256_regular_file(path)
     except OSError as err:
         return f"fullsend: hook {script} could not be read for verification (fail closed): {err}"
     if actual != expected:
@@ -256,6 +260,30 @@ def verify_script_digest(script: str, path: str) -> str | None:
             "refusing to run it (fail closed)"
         )
     return None
+
+
+def _sha256_regular_file(path: str) -> str:
+    """Hash a hook file without letting its type stall the adapter.
+
+    The hooks directory is agent-writable, so the path may have become a FIFO,
+    a device or a symlink. A plain open() of a FIFO blocks until codex kills
+    the hook at the handler timeout, and a killed hook does not block.
+    O_NONBLOCK makes that open return at once, O_NOFOLLOW refuses a symlink,
+    and anything but a small regular file is refused before it is read.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f"{path} is not a regular file")
+        if info.st_size > MAX_SCRIPT_BYTES:
+            raise OSError(f"{path} is larger than any hook script fullsend installs")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            return hashlib.sha256(handle.read(MAX_SCRIPT_BYTES + 1)).hexdigest()
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def verify_chain_siblings() -> str | None:
@@ -268,7 +296,12 @@ def verify_chain_siblings() -> str | None:
     in the map (a disabled stage, which HookFiles omits) must not exist,
     because the chain would load it.
     """
-    digests = expected_digests() or {}
+    digests = expected_digests()
+    if digests is None:
+        return (
+            f"fullsend: {HOOK_DIGESTS_ENV} is missing or malformed, so the chain's "
+            "stages cannot be verified (fail closed)"
+        )
     for name in CHAIN_SIBLINGS:
         path = os.path.join(HOOKS_DIR, name)
         if name in digests:

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1002,6 +1003,21 @@ func TestCodexAdapterChainSiblingsMatchTheChain(t *testing.T) {
 		}
 	}
 	require.Contains(t, chain, "import hook_io")
+	// Any fullsend hook module imported by the chain or one of its stages is
+	// loaded from the hooks directory too, whatever its name.
+	installed := security.HookFiles(security.SandboxHookConfigFromHarness(&harness.Harness{}))
+	imports := regexp.MustCompile(`(?m)^\s*(?:import|from)\s+([a-z_]+)`)
+	sources := []string{chain}
+	for _, name := range want {
+		sources = append(sources, string(installed[name]))
+	}
+	for _, src := range sources {
+		for _, m := range imports.FindAllStringSubmatch(src, -1) {
+			if _, ok := installed[m[1]+".py"]; ok && !slices.Contains(want, m[1]+".py") {
+				want = append(want, m[1]+".py")
+			}
+		}
+	}
 	var got []string
 	require.NoError(t, json.Unmarshal([]byte(codexAdapterFunc(t, "list(m.CHAIN_SIBLINGS)")), &got))
 	assert.ElementsMatch(t, want, got)
@@ -1045,8 +1061,10 @@ func TestCodexAdapter_PostToolUseWithholdsWhenTheBudgetIsSpent(t *testing.T) {
 	// Stand in for a slow first pass: the adapter reads the clock from here.
 	adapter, err := os.ReadFile(h.adapter)
 	require.NoError(t, err)
+	// Half a second short of MIN_SCRIPT_S remaining, derived from the
+	// adapter's own constants so a budget change keeps the test's intent.
 	patched := strings.Replace(string(adapter), "_START = time.monotonic()",
-		"_START = time.monotonic() - 27.5", 1)
+		"_START = time.monotonic() - (HANDLER_TIMEOUT_S - BUDGET_MARGIN_S - MIN_SCRIPT_S + 0.5)", 1)
 	require.NotEqual(t, string(adapter), patched, "the adapter must keep its clock in _START")
 	require.NoError(t, os.WriteFile(h.adapter, []byte(patched), 0o755))
 
@@ -1055,5 +1073,43 @@ func TestCodexAdapter_PostToolUseWithholdsWhenTheBudgetIsSpent(t *testing.T) {
 	input["tool_response"] = "ok example.test 0.5s\n"
 	got := h.run("PostToolUse", input, "posttool_chain.py")
 	assert.Equal(t, 2, got.exitCode, got.stderr)
+	assert.Empty(t, got.stdout)
 	assert.Contains(t, got.stderr, "hook budget")
+}
+
+// The hooks directory is agent-writable, so a hook file can become a FIFO or
+// a symlink mid-iteration. Hashing must refuse it at once: a read that blocks
+// until codex kills the hook would let the tool result through unchecked.
+func TestCodexAdapter_RefusesNonRegularHookFiles(t *testing.T) {
+	for name, replace := range map[string]func(path string){
+		"fifo": func(path string) {
+			require.NoError(t, exec.Command("mkfifo", path).Run())
+		},
+		"symlink": func(path string) {
+			real := path + ".real"
+			require.NoError(t, os.WriteFile(real, security.HookIO, 0o644))
+			require.NoError(t, os.Symlink(real, path))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newCodexAdapterHarness(t)
+			h.installPostToolChain()
+			path := filepath.Join(h.hooksDir, "hook_io.py")
+			require.NoError(t, os.Remove(path))
+			replace(path)
+
+			input := codexBashInput("go test ./...")
+			input["hook_event_name"] = "PostToolUse"
+			input["tool_response"] = "ok example.test 0.5s\n"
+			done := make(chan codexAdapterResult, 1)
+			go func() { done <- h.run("PostToolUse", input, "posttool_chain.py") }()
+			select {
+			case got := <-done:
+				assert.Equal(t, 2, got.exitCode, got.stderr)
+				assert.Contains(t, got.stderr, "fail closed")
+			case <-time.After(10 * time.Second):
+				t.Fatal("the adapter blocked on a non-regular hook file")
+			}
+		})
+	}
 }
