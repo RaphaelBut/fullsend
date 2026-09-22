@@ -65,6 +65,8 @@ region there remains an alternative.
 | `FULLSEND_GITLAB_POLLER_TOKEN` / `FULLSEND_GITLAB_ANALYST_TOKEN` / `FULLSEND_GITLAB_CODER_TOKEN` | CI/CD secret | Built-in role PATs provisioned by `repos install`. Absence is not a health failure while the gate is `disabled` or during partial `migrating`. | (masked) |
 | `OPENAI_API_KEY` | CI/CD variable (masked) | Opt-in static OpenAI API key when OpenAI WIF is unavailable; unused when the WIF trio is set | `sk-...` |
 
+For role-credential migrations, use [`--gitlab-role-cutover --gitlab-role-cutover-drained`](../../cli/repos.md#gitlab-role-cutover) only after shared-token jobs have drained. A successful cutover deletes `FULLSEND_FORGE_TOKEN`; missing role credentials are reported as drift when the gate is `enforced`.
+
 ## Syncing workflow templates
 
 After upgrading the fullsend CLI, re-run `github setup` to update the workflow file for a single repo:

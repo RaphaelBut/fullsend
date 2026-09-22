@@ -125,9 +125,12 @@ When repos are specified as positional arguments, only those repos are processed
 | `--fullsend-source` | | Path to a fullsend source checkout for content and cross-compile instead of auto-detecting or fetching from GitHub (requires `--vendor`) |
 | `--gitlab-url` | | GitLab instance URL (e.g. `https://gitlab.example.com`); sets `gitlab.url` in the manifest and implies `--forge=gitlab` when no forge is specified. Private-CA instances also need runner `tls-ca-file` / `CI_SERVER_TLS_CA_FILE` — see [Private CA (self-hosted GitLab)](../guides/getting-started/operations.md#private-ca-self-hosted-gitlab) |
 | `--gitlab-bot-token` | | GitLab bot PAT for free-tier instances that don't support project access tokens (env: `FULLSEND_GITLAB_BOT_TOKEN`) |
-| `--gitlab-role-migration` | | GitLab role-credential gate: `migrating`, `rollback`, or `disabled`. Fresh GitLab installs default to `migrating`. Existing shared-token installs stay on `disabled` until this flag (or an already-written gate) opts them in. `enforced` is reserved for verification (#7501). |
+| `--gitlab-role-migration` | | GitLab role-credential gate: `migrating`, `rollback`, or `disabled`. Fresh GitLab installs default to `migrating`. Existing shared-token installs stay on `disabled` until this flag (or an already-written gate) opts them in. Use `--gitlab-role-cutover` for the guarded transition to `enforced`. |
 | `--gitlab-role-registry` | | Path to administrator GitLab role registry JSON (custom roles: credential references and policy, never secret values). Written as the protected unmasked `FULLSEND_GITLAB_ROLE_REGISTRY` variable. |
 | `--gitlab-role-token` | | Administrator-provided GitLab role PAT (`role=token`, repeatable) for free-tier enrollment or a custom `own` credential. Values are never logged. |
+| `--gitlab-role-cutover` | `false` | Verify every registered role, enable fail-closed `enforced` mode, and retire the shared `FULLSEND_FORGE_TOKEN`. This is explicit and refuses partial, unhealthy, or unmapped migrations; use `--dry-run` to preview it. |
+| `--gitlab-role-cutover-drained` | `false` | Confirm that in-flight jobs using the shared credential have drained; required with `--gitlab-role-cutover` before the shared secret can be retired. |
+| `--gitlab-role-rollback-confirmed` | `false` | Confirm reopening the shared-credential path when changing an enforced role gate to `rollback` or `disabled`; required for that reverse transition. |
 | `--rotate-gitlab-roles` | `false` | Force-rotate GitLab role credentials even if they are not near expiry. Auto-rotation of expiring, expired, revoked, or unverified own-credential roles already runs during `repos install` when the gate is `migrating` or `enforced`. |
 | `--rotate-gitlab-role` | | Rotate a specific GitLab role (repeatable). Default is all own-credential roles that are due. A `reuse` role follows its target. |
 
@@ -183,6 +186,38 @@ Add a GitLab repo and install it:
 fullsend repos install group/project --forge gitlab --gitlab-url https://gitlab.example.com --direct
 ```
 
+### GitLab role cutover
+
+After provisioning and draining in-flight shared-token jobs, run:
+
+```bash
+fullsend repos install group/project --forge gitlab --gitlab-role-cutover --gitlab-role-cutover-drained
+```
+
+Cutover verifies built-in and registered-role credentials and mappings,
+requires project-token lifecycle inventory, enables fail-closed `enforced`
+mode, and then retires `FULLSEND_FORGE_TOKEN`. If retirement fails, a gate
+that this operation changed is restored to `migrating`; `--dry-run` performs
+the checks without writing the gate or secrets. Operators must separately
+verify GitLab permissions, branch rules, role-specific operation behavior,
+and the drain state in the deployment environment before approving cutover.
+
+In `fullsend repos status --json`, `gitlab_roles_ready` is true only when the
+base role diagnosis, built-in role readiness, and every registered-role mapping
+are all ready when role credentials are required (`migrating` or `enforced`).
+Shared-token-only installations (`disabled` or `rollback`) retain the legacy
+shared-credential readiness meaning and are not penalized for unprovisioned
+role secrets; their diagnostics likewise do not include built-in or registered
+role-readiness lines. In role-credential modes, the field may be false for an
+installation that previously reported ready while a custom-agent mapping was
+incomplete.
+
+Leaving an enforced gate requires the explicit
+`--gitlab-role-rollback-confirmed` acknowledgement because it reopens the
+shared-credential path. This is separate from the
+`--gitlab-role-cutover-drained` confirmation required before entering enforced
+mode.
+
 ## `repos status`
 
 Read-only comparison of the `repos.yaml` manifest against actual forge state. Reports installation status and configuration drift for each repo, including declared configuration-preset drift against `.fullsend/config.base.yaml`.
@@ -217,7 +252,16 @@ lifecycle diagnostic lines for roles needing attention (`expiring`,
 `expired`, `revoked`, `unverified`, or `overlapping`); roles that are
 `ok` or `unconfigured` do not get a diagnostic line. In enforced
 role-migration mode, expired or revoked role credentials are reported
-as `gitlab-role:<name>` drift.
+as `gitlab-role:<name>` drift. Status also appends built-in
+Poller/Analyst/Coder and registered-role readiness checks (secret presence,
+capability contract, and job-to-identity mapping). When token inventory is
+available, expired, revoked, or unverified role credentials also downgrade
+readiness; the base status path has no inventory and does not apply that
+lifecycle refinement. A present shared
+`FULLSEND_FORGE_TOKEN` is not treated as a substitute for a missing
+built-in role. Registered roles with no agent mapping are also reported as
+not ready. These checks do not change the migration gate or retire the shared
+token.
 
 **JSON output** (`--json`) returns the full `StatusResult` object with per-repo details and aggregate summary counts.
 
