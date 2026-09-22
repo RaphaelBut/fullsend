@@ -300,18 +300,23 @@ func cleanupOwnersAuth(w *world.World) {
 	owner := w.Org
 	repo := w.RepoName
 
-	if err := disableOwnersAuth(w); err != nil {
-		worldLogf(w, "behaviour cleanup: disable OWNERS auth: %v", err)
+	steps := []struct {
+		desc string
+		fn   func() error
+	}{
+		{"disable OWNERS auth", func() error { return disableOwnersAuth(w) }},
+		{"clear OWNERS file", func() error {
+			return w.SCM.CommitFile(ctx, owner, repo, "OWNERS",
+				"behaviour: clear OWNERS file", []byte("approvers: []\nreviewers: []\n"))
+		}},
+		{"clear OWNERS_ALIASES file", func() error {
+			return w.SCM.CommitFile(ctx, owner, repo, "OWNERS_ALIASES",
+				"behaviour: clear OWNERS_ALIASES file", []byte("aliases: {}\n"))
+		}},
 	}
-
-	empty := []byte("approvers: []\nreviewers: []\n")
-	if err := w.SCM.CommitFile(ctx, owner, repo,
-		"OWNERS", "behaviour: clear OWNERS file", empty); err != nil {
-		worldLogf(w, "behaviour cleanup: remove OWNERS file: %v", err)
-	}
-	emptyAliases := []byte("aliases: {}\n")
-	if err := w.SCM.CommitFile(ctx, owner, repo,
-		"OWNERS_ALIASES", "behaviour: clear OWNERS_ALIASES file", emptyAliases); err != nil {
-		worldLogf(w, "behaviour cleanup: remove OWNERS_ALIASES file: %v", err)
+	for _, st := range steps {
+		if err := cleanupRetry(w.Logf, st.desc, st.fn); err != nil {
+			worldLogf(w, "behaviour cleanup: %s: %v", st.desc, err)
+		}
 	}
 }
