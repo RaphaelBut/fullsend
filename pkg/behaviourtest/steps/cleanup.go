@@ -48,10 +48,10 @@ func cleanupRetry(logf func(string, ...any), desc string, fn func() error) error
 	return lastErr
 }
 
-// ValidateSlotClean reads the repo slot's config and fails if a previous
+// ValidateSlotClean reads the leased repo's config and fails if a previous
 // scenario left mutable state behind (e.g. kill switch on, OWNERS auth
-// enabled). Called before every scenario so stale state is caught
-// immediately rather than causing silent false positives downstream.
+// enabled). Called when a scenario leases its repo, so stale state is
+// caught before it causes a silent false positive.
 func ValidateSlotClean(w *world.World) error {
 	// Unit tests construct bare worlds with no SCM driver;
 	// there is no remote repo to validate in that case.

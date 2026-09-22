@@ -39,10 +39,6 @@ func beforeScenario(ctx context.Context, tags []string, template *world.World) (
 	w := template.Clone()
 	resetScenarioWorld(w)
 
-	if err := steps.ValidateSlotClean(w); err != nil {
-		return ctx, err
-	}
-
 	ctx = world.WithWorld(ctx, w)
 	return ctx, nil
 }

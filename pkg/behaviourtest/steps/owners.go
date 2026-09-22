@@ -3,6 +3,7 @@ package steps
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -39,6 +40,9 @@ func registerOwnersSteps(sc *godog.ScenarioContext) {
 	})
 	sc.Step(`^the outsider posts "([^"]+)" on the issue$`, func(ctx context.Context, command string) (context.Context, error) {
 		return ctx, whenOutsiderPostsCommand(world.FromContext(ctx), command)
+	})
+	sc.Step(`^the triage agent did not run$`, func(ctx context.Context) (context.Context, error) {
+		return ctx, thenTriageAgentDidNotRun(world.FromContext(ctx))
 	})
 	sc.Step(`^the dispatch run does not authorize via OWNERS$`, func(ctx context.Context) (context.Context, error) {
 		return ctx, thenDispatchRunDoesNotAuthorizeViaOwners(world.FromContext(ctx))
@@ -207,6 +211,29 @@ func getWorkflowLogs(w *world.World) (string, error) {
 	}
 	return w.CI.GetRunLogs(context.Background(),
 		w.RepoOwner, w.RepoName, w.WorkflowRun.ID)
+}
+
+// thenTriageAgentDidNotRun checks the completed triage run uploaded no
+// agent artifact. Log text cannot prove this: the logs echo the routing
+// script, which contains every message it can print.
+func thenTriageAgentDidNotRun(w *world.World) error {
+	if err := ensureTriageWorkflowComplete(w); err != nil {
+		return err
+	}
+	dest, err := os.MkdirTemp("", "owners-no-triage-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dest)
+	err = w.CI.DownloadNamedArtifactFromRun(context.Background(),
+		w.RepoOwner, w.RepoName, w.WorkflowRun.ID, install.PerRepoAgentArtifact, dest)
+	if err == nil {
+		return fmt.Errorf("triage run %d uploaded %q: the agent ran", w.WorkflowRun.ID, install.PerRepoAgentArtifact)
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		return fmt.Errorf("checking triage run %d artifacts: %w", w.WorkflowRun.ID, err)
+	}
+	return nil
 }
 
 func requireWriteActor(w *world.World) error {

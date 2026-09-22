@@ -848,6 +848,8 @@ func TestDispatchPerStageAuthorization(t *testing.T) {
 				"OWNERS approvers must be checked in the write|triage case arm")
 			assert.Regexp(t, `(?s);;&\s*\n\s+triage\).*_owners_has_user reviewers`, s,
 				"OWNERS reviewers must be in the triage-only arm after ;;&  (not ;&)")
+			assert.Contains(t, s, `[.authorization[]? | select(.provider == "owners_file")] | length`,
+				"OWNERS auth must be gated on the owners_file provider in config.yaml")
 			assert.Contains(t, s, `lc_user="${username,,}"`,
 				"OWNERS username comparison must be case-insensitive")
 			assert.Contains(t, s, `_owners_has_user approvers "${lc_user}"`,

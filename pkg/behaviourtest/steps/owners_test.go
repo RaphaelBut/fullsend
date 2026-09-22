@@ -1,12 +1,17 @@
 package steps
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/fullsend-ai/fullsend/internal/config"
+	"github.com/fullsend-ai/fullsend/internal/forge"
+	"github.com/fullsend-ai/fullsend/pkg/behaviourtest/drivers/ci"
+	"github.com/fullsend-ai/fullsend/pkg/behaviourtest/world"
 )
 
 func TestAuthorizationOwnersFileRoundTrip(t *testing.T) {
@@ -88,4 +93,31 @@ func TestAuthorizationOwnersFileRoundTrip(t *testing.T) {
 		assert.Contains(t, s, "- coder")
 		assert.Contains(t, s, "provider: owners_file")
 	})
+}
+
+// fakeArtifactCI answers DownloadNamedArtifactFromRun only.
+type fakeArtifactCI struct {
+	ci.Driver
+	err error
+}
+
+func (f *fakeArtifactCI) DownloadNamedArtifactFromRun(context.Context, string, string, int, string, string) error {
+	return f.err
+}
+
+func TestThenTriageAgentDidNotRun(t *testing.T) {
+	t.Parallel()
+
+	run := func(ciErr error) error {
+		return thenTriageAgentDidNotRun(&world.World{
+			RepoOwner:   "org",
+			RepoName:    "repo",
+			WorkflowRun: &forge.WorkflowRun{ID: 7},
+			CI:          &fakeArtifactCI{err: ciErr},
+		})
+	}
+
+	require.NoError(t, run(errors.New(`artifact "fullsend-triage" not found on workflow run 7`)))
+	require.ErrorContains(t, run(nil), "the agent ran")
+	require.ErrorContains(t, run(errors.New("HTTP 502")), "checking triage run 7 artifacts")
 }

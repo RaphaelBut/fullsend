@@ -70,12 +70,12 @@ Feature: OWNERS file authorization for bash routing
     And the agent will succeed to Prove execution
     And the triage workflow logs do not contain "##[notice]OWNERS file resolved user"
 
-  Scenario: Triage dispatches without OWNERS path when not opted in
+  Scenario: OWNERS approver is not authorized when not opted in
     Given an OWNERS file listing the outsider as an approver
     And a dummy agent that would:
       | description          | op            | args                                                      |
       | Prove execution      | write_fixture | output/agent-result.json, fixtures/triage/sufficient.json |
-    When the write actor opens an issue for OWNERS auth testing
+    When the outsider opens an issue for OWNERS auth testing
     Then the triage workflow completes successfully
-    And the agent will succeed to Prove execution
+    And the triage agent did not run
     And the triage workflow logs do not contain "##[notice]OWNERS file resolved user"
