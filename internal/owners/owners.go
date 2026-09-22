@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -17,19 +18,21 @@ var validUsername = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 type Role int
 
 const (
-	None     Role = iota
-	Reviewer      // triage-equivalent
-	Approver      // write-equivalent
+	RoleNone     Role = iota
+	RoleReviewer      // triage-equivalent
+	RoleApprover      // write-equivalent
 )
 
 func (r Role) String() string {
 	switch r {
-	case Reviewer:
+	case RoleReviewer:
 		return "reviewer"
-	case Approver:
+	case RoleApprover:
 		return "approver"
-	default:
+	case RoleNone:
 		return "none"
+	default:
+		return fmt.Sprintf("Role(%d)", int(r))
 	}
 }
 
@@ -47,69 +50,98 @@ type aliasesFile struct {
 
 // Resolve checks whether username appears in the OWNERS file at
 // ownersPath (directly or via aliases in aliasesPath). Returns
-// Approver if the user is an approver, Reviewer if only a reviewer,
-// or None if not listed. Matching is case-insensitive.
+// RoleApprover if the user is an approver, RoleReviewer if only a reviewer,
+// or RoleNone if not listed. Matching is case-insensitive.
 //
 // A missing OWNERS file returns an error. A missing OWNERS_ALIASES
-// file is not an error — alias resolution is skipped.
+// file is not an error — alias resolution is skipped. A malformed
+// OWNERS_ALIASES file is an error: without it, alias keys cannot be told
+// apart from logins.
 func Resolve(ownersPath, aliasesPath, username string) (Role, error) {
 	if !validUsername.MatchString(username) {
-		return None, nil
+		return RoleNone, nil
 	}
 	data, err := os.ReadFile(ownersPath)
 	if err != nil {
-		return None, fmt.Errorf("reading OWNERS: %w", err)
+		return RoleNone, fmt.Errorf("reading OWNERS: %w", err)
 	}
 	var owners ownersFile
 	if err := yaml.Unmarshal(data, &owners); err != nil {
-		return None, fmt.Errorf("parsing OWNERS: %w", err)
+		return RoleNone, fmt.Errorf("parsing OWNERS: %w", err)
 	}
 
 	var aliases aliasesFile
 	if aliasData, err := os.ReadFile(aliasesPath); err == nil {
 		if err := yaml.Unmarshal(aliasData, &aliases); err != nil {
-			return None, fmt.Errorf("parsing OWNERS_ALIASES: %w", err)
+			return RoleNone, fmt.Errorf("parsing OWNERS_ALIASES: %w", err)
+		}
+		if err := checkAliasKeys(aliases.Aliases); err != nil {
+			return RoleNone, err
 		}
 	}
 
 	if hasMember(owners.Approvers, username, aliases.Aliases) {
-		return Approver, nil
+		return RoleApprover, nil
 	}
 	if hasMember(owners.Reviewers, username, aliases.Aliases) {
-		return Reviewer, nil
+		return RoleReviewer, nil
 	}
-	return None, nil
+	return RoleNone, nil
 }
 
-// hasMember checks if username is in entries, either directly or by
-// expanding alias names through the aliases map.
+// hasMember reports whether username is listed in entries. An entry that
+// names an alias key matches only that alias's members, never a login of
+// the same name, so nobody can claim an alias by registering its name.
 func hasMember(entries []string, username string, aliases map[string][]string) bool {
 	for _, entry := range entries {
+		if members, ok := lookupAlias(aliases, entry); ok {
+			if slices.ContainsFunc(members, func(m string) bool { return strings.EqualFold(m, username) }) {
+				return true
+			}
+			continue
+		}
 		if strings.EqualFold(entry, username) {
 			return true
-		}
-		if members, ok := aliases[entry]; ok {
-			for _, m := range members {
-				if strings.EqualFold(m, username) {
-					return true
-				}
-			}
 		}
 	}
 	return false
 }
 
+// checkAliasKeys rejects alias keys that differ only by case, which would
+// make lookupAlias ambiguous.
+func checkAliasKeys(aliases map[string][]string) error {
+	seen := make(map[string]bool, len(aliases))
+	for key := range aliases {
+		folded := strings.ToLower(key)
+		if seen[folded] {
+			return fmt.Errorf("parsing OWNERS_ALIASES: duplicate alias %q (keys are case-insensitive)", key)
+		}
+		seen[folded] = true
+	}
+	return nil
+}
+
+// lookupAlias finds name among the alias keys, ignoring case.
+func lookupAlias(aliases map[string][]string, name string) ([]string, bool) {
+	for key, members := range aliases {
+		if strings.EqualFold(key, name) {
+			return members, true
+		}
+	}
+	return nil, false
+}
+
 // MapToActorRole upgrades currentRole based on the OWNERS role.
-// Approver grants at least write; reviewer grants at least triage.
+// An approver gets at least write; a reviewer gets at least triage.
 // Never downgrades — if the collaborator API already granted a
 // higher role, it is preserved.
 func MapToActorRole(role Role, currentRole normevent.ActorRole) normevent.ActorRole {
 	switch role {
-	case Approver:
+	case RoleApprover:
 		if !normevent.IsWriteAuthorized(currentRole) {
 			return normevent.RoleWrite
 		}
-	case Reviewer:
+	case RoleReviewer:
 		if currentRole == normevent.RoleNone || currentRole == normevent.RoleExternal || currentRole == normevent.RoleRead {
 			return normevent.RoleTriage
 		}

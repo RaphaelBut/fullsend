@@ -57,7 +57,7 @@ func Dispatch(ctx context.Context, opts Options) ([]ExecutionRef, error) {
 		role, err := owners.Resolve(ownersPath, aliasesPath, opts.Event.Actor.ID)
 		if err != nil {
 			log.Printf("harness dispatch: OWNERS resolution failed for %s: %v", opts.Event.Actor.ID, err)
-		} else if role != owners.None {
+		} else if role != owners.RoleNone {
 			effectiveRole = owners.MapToActorRole(role, effectiveRole)
 			log.Printf("harness dispatch: OWNERS file resolved user %s as %s", opts.Event.Actor.ID, role)
 		}

@@ -145,7 +145,8 @@ func TestDispatch_OwnersUpgradesActorRole(t *testing.T) {
 func TestDispatch_OwnersReviewerDeniedWriteLevel(t *testing.T) {
 	dir := t.TempDir()
 
-	configDir := writeHarnessConfigSubdir(t, dir, issuePingHarnessYAML(), func(cfg config.PerRepoConfigWriter) {
+	// issue-opened matches this harness, so write-level auth is the only gate.
+	configDir := writeHarnessConfigSubdir(t, dir, issueOpenedHarnessYAML(), func(cfg config.PerRepoConfigWriter) {
 		cfg.SetAuthorizationOwnersFile(true)
 	})
 
@@ -240,16 +241,6 @@ func writeHarnessConfig(t *testing.T, dir, harnessYAML string, opts ...func(conf
 func writeHarnessConfigSubdir(t *testing.T, repoRoot, harnessYAML string, opts ...func(config.PerRepoConfigWriter)) string {
 	t.Helper()
 	configDir := filepath.Join(repoRoot, ".fullsend")
-	harnessDir := filepath.Join(configDir, "harness")
-	require.NoError(t, os.MkdirAll(harnessDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(harnessDir, "issue-ping.yaml"), []byte(harnessYAML), 0o644))
-	cfg := config.NewPerRepoConfig(nil, "fullsend-ai/demo")
-	cfg.SetAgents([]config.AgentEntry{{Name: "issue-ping", Source: "harness/issue-ping.yaml"}})
-	for _, opt := range opts {
-		opt(cfg)
-	}
-	data, err := yaml.Marshal(cfg)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(configDir, "config.yaml"), data, 0o644))
+	writeHarnessConfig(t, configDir, harnessYAML, opts...)
 	return configDir
 }

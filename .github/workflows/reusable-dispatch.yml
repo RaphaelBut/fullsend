@@ -165,26 +165,31 @@ jobs:
           STAGE=""
           TRIGGER_SOURCE=""
 
-          # Check direct membership or alias membership in an OWNERS list.
-          # Used by has_repo_permission when OWNERS-file auth is enabled.
-          # yq errors are intentionally suppressed (&>/dev/null): a parse
-          # failure or missing key means "no match", falling through to
-          # the collaborator API — not a fail-open gate.
+          # Report whether the lowercased user is in an OWNERS list. An entry
+          # that names an OWNERS_ALIASES key matches only that alias's members,
+          # never a login of the same name. A yq/jq failure means "no match",
+          # so the caller falls through to the collaborator API; a malformed
+          # OWNERS_ALIASES disables OWNERS matching (alias keys cannot be told
+          # apart from logins without it).
           _owners_has_user() {
-            local key="${1}" user="${2}"
-            if yq -e ".${key}[] | select((. | downcase) == \"${user}\")" OWNERS &>/dev/null; then
-              return 0
-            fi
+            local key="${1}" user="${2}" aliases="" entry
             if [[ -f "OWNERS_ALIASES" ]]; then
-              local entry
-              while IFS= read -r entry; do
-                [[ -z "${entry}" ]] && continue
-                [[ ! "${entry}" =~ ^[a-zA-Z0-9_-]+$ ]] && continue
-                if yq -e ".aliases.\"${entry}\"[] | select((. | downcase) == \"${user}\")" OWNERS_ALIASES &>/dev/null; then
-                  return 0
-                fi
-              done < <(yq ".${key}[]" OWNERS 2>/dev/null)
+              aliases=$(yq -o=json -I=0 '.aliases // {}' OWNERS_ALIASES 2>/dev/null) || return 1
+              # Same shape the Go resolver accepts; case-folded duplicate keys are malformed.
+              aliases=$(jq -ce 'select(type == "object"
+                and all(.[]; . == null or (type == "array" and all(.[]; type != "array" and type != "object")))
+                and (keys | length) == (keys | map(ascii_downcase) | unique | length))
+                | with_entries(.key |= ascii_downcase)' <<<"${aliases}" 2>/dev/null) || return 1
             fi
+            while IFS= read -r entry; do
+              [[ ! "${entry}" =~ ^[a-zA-Z0-9_-]+$ ]] && continue
+              entry="${entry,,}"
+              if [[ -n "${aliases}" ]] && jq -e --arg a "${entry}" 'has($a)' <<<"${aliases}" >/dev/null 2>&1; then
+                jq -e --arg a "${entry}" --arg u "${user}" '.[$a] // [] | any(.[]; . != null and (tostring | ascii_downcase) == $u)' <<<"${aliases}" >/dev/null 2>&1 && return 0
+                continue
+              fi
+              [[ "${entry}" == "${user}" ]] && return 0
+            done < <(yq ".${key}[]" OWNERS 2>/dev/null)
             return 1
           }
 
@@ -199,9 +204,9 @@ jobs:
             # Safe: sparse-checkout pins to base branch SHA, so PR authors cannot
             # self-authorize by adding themselves to OWNERS.
             if [[ -f "OWNERS" && -f ".fullsend/config.yaml" ]]; then
-              if [[ "$(yq '(.authorization // []) | any_c(.provider == "owners_file")' .fullsend/config.yaml)" == "true" ]]; then
+              if [[ "$(yq '[.authorization[]? | select(.provider == "owners_file")] | length' .fullsend/config.yaml 2>/dev/null)" =~ ^[1-9] ]]; then
                 if [[ ! "${username}" =~ ^[a-zA-Z0-9-]+$ ]]; then
-                  echo "::warning::OWNERS auth skipped: username '${username}' contains unexpected characters" >&2
+                  echo "::warning::OWNERS auth skipped: username contains characters outside [A-Za-z0-9-]" >&2
                 else
                   local lc_user="${username,,}"
                   case "${min}" in
