@@ -1188,6 +1188,36 @@ func TestMaybeProvisionGitLabRoles_ExplicitMigratingFlag(t *testing.T) {
 	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
 }
 
+func TestMaybeProvisionGitLabRoles_ExplicitEnforcedFlagDefersCutoverOnMissingRoleSecret(t *testing.T) {
+	ctx := context.Background()
+	fake := forge.NewFakeClient()
+	fake.Secrets["group/project/"+forge.SecretForgeToken] = true
+	var buf bytes.Buffer
+	printer := ui.New(&buf)
+	opts := &reposInstallConfig{
+		gitlabRoleModeFlag:       gitlabroles.ModeEnforced,
+		testGitLabTokenInventory: cliCutoverTokens{},
+	}
+
+	// No GitLab token client and no administrator-provided credentials:
+	// provisioning cannot create any role secret. Provisioning must
+	// never write the enforced gate directly from the flag's value —
+	// CutoverGitLabRoleCredentials is the sole writer of enforced, once
+	// role readiness has been verified. If provisioning wrote enforced
+	// here, the explicit cutover below would hard-fail with the repo
+	// stuck in enforced mode and missing role secrets.
+	require.NoError(t, maybeProvisionGitLabRoles(ctx, opts, fake, printer, "group", "project"))
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken])
+
+	buf.Reset()
+	err := maybeCutoverGitLabRoles(ctx, opts, fake, printer, "group", "project")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not ready")
+	assert.Equal(t, "migrating", fake.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
+	assert.True(t, fake.Secrets["group/project/"+forge.SecretForgeToken], "partial enrollment must not reopen or drop the shared credential")
+}
+
 func TestGitLabRoleWorkNeededInvalidLiveMode(t *testing.T) {
 	ctx := context.Background()
 	fake := forge.NewFakeClient()

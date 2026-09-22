@@ -13,18 +13,28 @@ import (
 	"github.com/fullsend-ai/fullsend/internal/gitlabroles"
 )
 
-// Sentinel errors for GitLab role cutover. Ordinary unflagged install
-// treats these as deferred (leave migrating, do not reopen shared-token
-// fallback) rather than failing the whole converge.
-var (
-	ErrGitLabRoleCutoverNotReady     = errors.New("GitLab role cutover is not ready")
-	ErrGitLabRoleCutoverWrongMode    = errors.New("GitLab role cutover requires migrating or enforced mode")
-	ErrGitLabRoleCutoverStateChanged = errors.New("GitLab role state changed during cutover verification")
-)
+// ErrGitLabRoleCutoverNotReady indicates a required role credential is
+// missing or not yet ready when cutover is attempted. Ordinary unflagged
+// install treats this as deferred: leave migrating, do not reopen the
+// shared-token fallback.
+var ErrGitLabRoleCutoverNotReady = errors.New("GitLab role cutover is not ready")
 
-// GitLabRoleCutoverDeferred reports whether err is a cutover precondition
-// failure that ordinary install should leave in place instead of failing.
-func GitLabRoleCutoverDeferred(err error) bool {
+// ErrGitLabRoleCutoverWrongMode indicates cutover was attempted while the
+// GitLab role migration gate is neither migrating nor enforced. Ordinary
+// unflagged install treats this as deferred rather than failing the
+// whole converge.
+var ErrGitLabRoleCutoverWrongMode = errors.New("GitLab role cutover requires migrating or enforced mode")
+
+// ErrGitLabRoleCutoverStateChanged indicates the role registry, credential
+// presence, or rotation state changed between the initial readiness check
+// and the final pre-cutover revalidation. Ordinary unflagged install
+// treats this as deferred rather than failing the whole converge.
+var ErrGitLabRoleCutoverStateChanged = errors.New("GitLab role state changed during cutover verification")
+
+// IsGitLabRoleCutoverDeferred reports whether err is a cutover
+// precondition failure that ordinary install should leave in place
+// instead of failing.
+func IsGitLabRoleCutoverDeferred(err error) bool {
 	return errors.Is(err, ErrGitLabRoleCutoverNotReady) ||
 		errors.Is(err, ErrGitLabRoleCutoverWrongMode) ||
 		errors.Is(err, ErrGitLabRoleCutoverStateChanged)
@@ -164,7 +174,7 @@ func CutoverGitLabRoleCredentials(ctx context.Context, cfg GitLabRoleCutoverConf
 	latestBuiltin = latestBuiltin.WithLifecycle(lifecycle)
 	latestRegistered = latestRegistered.WithLifecycle(lifecycle)
 	if !latestBuiltin.Ready || !latestRegistered.Ready {
-		return result, fmt.Errorf("%w: GitLab role state is no longer ready for cutover; rerun verification", ErrGitLabRoleCutoverNotReady)
+		return result, fmt.Errorf("%w: state changed during revalidation; rerun verification", ErrGitLabRoleCutoverNotReady)
 	}
 
 	gateChanged := mode != gitlabroles.ModeEnforced

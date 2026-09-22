@@ -428,20 +428,19 @@ func parseGitLabRoleTokens(flags []string) (map[gitlabroles.Role]string, error) 
 }
 
 func maybeProvisionGitLabRoles(ctx context.Context, opts *reposInstallConfig, client forge.Client, printer *ui.Printer, owner, repo string) error {
-	needed, current, err := gitLabRoleWorkNeeded(ctx, client, opts, owner, repo)
+	needed, mode, err := gitLabRoleWorkNeeded(ctx, client, opts, owner, repo)
 	if err != nil {
 		return err
 	}
 	if !needed {
 		return nil
 	}
-	mode := opts.gitlabRoleModeFlag
-	if mode == "" {
-		// Preserve an explicit rollback gate. Legacy disabled/unset
-		// installs are promoted to migrating so ordinary unflagged
-		// install can provision role credentials and then cut over.
-		mode = current
-	}
+	// gitLabRoleWorkNeeded already resolves the mode to provision with,
+	// including preserving an explicit rollback gate, promoting legacy
+	// disabled/unset installs to migrating, and keeping an explicit
+	// --gitlab-role-migration=enforced request from writing the enforced
+	// gate directly (CutoverGitLabRoleCredentials is the sole writer of
+	// enforced, once role readiness has been verified).
 	return setupGitLabRoleCredentials(ctx, opts, client, printer, owner, repo, mode)
 }
 
@@ -466,6 +465,22 @@ func gitLabRoleWorkNeeded(ctx context.Context, client forge.Client, opts *reposI
 			if current == gitlabroles.ModeEnforced && opts.gitlabRoleModeFlag.UsesSharedOnly() && !opts.gitlabRoleRollbackConfirmed {
 				return false, "", fmt.Errorf("leaving enforced GitLab role migration mode requires --gitlab-role-rollback-confirmed")
 			}
+		}
+		if opts.gitlabRoleModeFlag == gitlabroles.ModeEnforced {
+			// CutoverGitLabRoleCredentials must be the sole writer of the
+			// enforced gate, after role readiness has been verified.
+			// Provisioning with the flag's enforced value directly would
+			// let a partial provisioning run leave the gate at enforced
+			// with missing role secrets if the explicit cutover that
+			// follows then fails closed. Provision with the live
+			// non-shared-only mode instead (already-enforced stays
+			// enforced; anything shared-only is promoted to migrating),
+			// and let cutover promote to enforced once every role is
+			// ready.
+			if current.UsesSharedOnly() {
+				return true, gitlabroles.ModeMigrating, nil
+			}
+			return true, current, nil
 		}
 		return true, opts.gitlabRoleModeFlag, nil
 	}
@@ -630,7 +645,7 @@ func maybeCutoverGitLabRoles(ctx context.Context, opts *reposInstallConfig, clie
 		DrainConfirmed: drainConfirmed, DryRun: opts.dryRun,
 	})
 	if err != nil {
-		if !explicit && repos.GitLabRoleCutoverDeferred(err) {
+		if !explicit && repos.IsGitLabRoleCutoverDeferred(err) {
 			printer.StepInfo(fmt.Sprintf("[%s] GitLab role cutover deferred: %v", repoFullName, err))
 			return nil
 		}

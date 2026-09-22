@@ -67,7 +67,7 @@ func TestCutoverGitLabRoleCredentialsRefusesMissingRole(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGitLabRoleCutoverNotReady)
-	assert.True(t, GitLabRoleCutoverDeferred(err))
+	assert.True(t, IsGitLabRoleCutoverDeferred(err))
 	assert.False(t, result.Enforced)
 	assert.Equal(t, "migrating", fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
 	assert.True(t, fc.Secrets["group/project/"+forge.SecretForgeToken])
@@ -331,7 +331,7 @@ func TestCutoverGitLabRoleCredentialsRevalidatesBeforeWrites(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGitLabRoleCutoverStateChanged)
-	assert.True(t, GitLabRoleCutoverDeferred(err))
+	assert.True(t, IsGitLabRoleCutoverDeferred(err))
 	assert.Contains(t, err.Error(), "state changed")
 	assert.False(t, result.Enforced)
 	assert.Equal(t, "enforced", fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
@@ -357,13 +357,13 @@ func TestCutoverGitLabRoleCredentialsWrongModeIsDeferred(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrGitLabRoleCutoverWrongMode)
-	assert.True(t, GitLabRoleCutoverDeferred(err))
+	assert.True(t, IsGitLabRoleCutoverDeferred(err))
 	assert.False(t, result.Enforced)
 	assert.Equal(t, "rollback", fc.VariableValues["group/project/"+forge.VarGitLabRoleMigration])
 }
 
-func TestGitLabRoleCutoverDeferredIgnoresUnrelatedErrors(t *testing.T) {
+func TestIsGitLabRoleCutoverDeferredIgnoresUnrelatedErrors(t *testing.T) {
 	t.Parallel()
-	assert.False(t, GitLabRoleCutoverDeferred(errors.New("permission denied")))
-	assert.False(t, GitLabRoleCutoverDeferred(nil))
+	assert.False(t, IsGitLabRoleCutoverDeferred(errors.New("permission denied")))
+	assert.False(t, IsGitLabRoleCutoverDeferred(nil))
 }
