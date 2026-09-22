@@ -345,7 +345,7 @@ func uninstallRepoResources(ctx context.Context, cfg ResolvedConfig, direct bool
 		return result
 	}
 
-	progress(fullName, "done", fmt.Sprintf("Removed: %d vars, %d secrets", varsDeleted, secretsDeleted))
+	progress(fullName, "done", fmt.Sprintf("Removed: %d vars, %d secrets", result.VarsDeleted, result.SecretsDeleted))
 	return result
 }
 
