@@ -66,7 +66,7 @@ Effort maps onto codex's own reasoning levels:
 | `max` | `max` |
 
 Codex has no equivalent of a fallback model chain: `FULLSEND_FALLBACK_MODELS` is ignored with a
-warning, as it is on pi.
+warning.
 
 ## At a glance
 
