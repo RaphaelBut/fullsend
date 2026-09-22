@@ -2956,8 +2956,9 @@ func init() {
 		reservedSandboxKeys[k] = true
 	}
 	// Provider-only keys are reserved in the sandbox (env.sandbox cannot
-	// inject them) but must remain expandable by expandProviderValue, so
-	// they are not passed to DenyExpansionKeys (#6649). expandProviderValue
+	// inject them) but must remain expandable in provider credential values,
+	// so they are not passed to DenyExpansionKeys; config values refuse them
+	// (#6649). expandProviderValue
 	// is not scoped by provider type, so any provider definition's ${}
 	// credential can reference these keys, not only fullsend-github-packages.
 	// This does not widen the trusted-ref surface: .fullsend provider
@@ -2966,6 +2967,9 @@ func init() {
 	// docs/guides/user/customizing-agents.md#private-registries-and-github-packages.
 	for k := range providerOnlyKeys {
 		reservedSandboxKeys[k] = true
+		// Provider config values are passed on argv, so refuse provider-only
+		// keys there; only credential values (child env) may expand them.
+		sandbox.CredentialOnlyExpansionKeys(k)
 	}
 }
 

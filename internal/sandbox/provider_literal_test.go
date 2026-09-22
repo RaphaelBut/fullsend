@@ -210,3 +210,22 @@ func TestProfileListed(t *testing.T) {
 	assert.True(t, profileListed(textOut, "fullsend-openai"), "human table: first column is the id")
 	assert.False(t, profileListed(textOut, "OpenAI"))
 }
+
+func TestProviderConfigCannotExpandCredentialOnlyKeys(t *testing.T) {
+	token := "ghs_" + strings.Repeat("W", 36)
+	t.Setenv("GH_WORKFLOW_TOKEN", token)
+	CredentialOnlyExpansionKeys("GH_WORKFLOW_TOKEN")
+
+	args, extraEnv, _ := buildProviderArgs("github-packages", "fullsend-github-packages",
+		map[string]string{"GITHUB_TOKEN": "${GH_WORKFLOW_TOKEN}"},
+		map[string]string{"URL": "https://x/${GH_WORKFLOW_TOKEN}"}, false)
+	assert.Contains(t, extraEnv, "GITHUB_TOKEN="+token, "credential values still expand the key")
+	assert.Contains(t, args, "URL=https://x/", "config values expand a credential-only key to empty (#6649)")
+	assert.NotContains(t, strings.Join(args, " "), token, "the token must never reach argv through config")
+
+	upd := buildProviderUpdateArgs("github-packages",
+		map[string]string{"GITHUB_TOKEN": "${GH_WORKFLOW_TOKEN}"},
+		map[string]string{"URL": "https://x/${GH_WORKFLOW_TOKEN}"}, false)
+	assert.Contains(t, upd, "URL=https://x/")
+	assert.NotContains(t, strings.Join(upd, " "), token)
+}

@@ -61,15 +61,16 @@ already follow the run-scoped provider pattern
 credential bound to the GitHub Packages hosts; forge identity stays the minted
 App token.**
 
-1. On GitHub Actions, `mintAgentToken` copies the pre-mint `GH_TOKEN` to
+1. On GitHub Actions, the mint step copies the pre-mint `GH_TOKEN` to
    `GH_WORKFLOW_TOKEN` before replacing `GH_TOKEN` with the minted token,
    masks it, and unsets it at cleanup. Outside Actions nothing is copied: a local
    PAT never becomes a workflow token, and a caller-set value is left alone.
 2. The variable is a new credential class, provider-only: every harness `${}`
    site (`runner_env`, `env.runner`, `env.sandbox`, `host_files`,
-   `validation_loop.schema`) refuses it, pre/post/validation child environments
-   strip it, `env.sandbox` cannot name it, and redaction knows its value. Only
-   provider credential expansion reads it; the sandbox environment holds the
+   `validation_loop`) refuses it, pre/post/validation child environments strip
+   it, `env.sandbox` cannot name it, and redaction knows its value. Only
+   provider credential values read it (never provider config, which is passed
+   on argv); the sandbox environment holds the
    placeholder, resolved by the proxy solely at the bound hosts.
 3. A repo opts in with a provider (`type: fullsend-github-packages`) whose
    profile binds the placeholder to `npm.pkg.github.com:443` and
