@@ -32,7 +32,7 @@ specific generation names the id.
 
 **Fallback chains.** `FULLSEND_FALLBACK_MODELS=a,b` becomes `--fallback-model a,b`, tried in order
 when the primary model is overloaded or retired. pi uses the same list differently: the runner
-retries an alias request on the next model when Vertex does not serve the first (404/403), for
+retries an alias request on the next model when Vertex answers that it does not serve the first, for
 the top-level run only; see [pi](pi.md#at-a-glance).
 
 ## At a glance

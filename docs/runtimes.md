@@ -56,7 +56,7 @@ sequenceDiagram
 |---|---|---|---|
 | Models | Anthropic on Vertex | Claude, **Grok** and **Gemini** on Vertex; **GPT** via OpenAI WIF (opt-in, [not yet exercised live](runtimes/pi.md#models-and-providers)) | **GPT only**, via OpenAI WIF ([not yet exercised live](runtimes/codex.md#not-yet-exercised)) |
 | Sub-agents | Native (`Agent` tool) | `Agent`/`Task` via a fullsend extension | Not available |
-| Fallback model chain | `FULLSEND_FALLBACK_MODELS`, tried in order | Top-level run only: alias requests tried in order on Vertex 404/403, same provider only; pinned ids and sub-agent children fail loudly | Ignored with a warning |
+| Fallback model chain | `FULLSEND_FALLBACK_MODELS`, tried in order | Top-level run only: alias requests tried in order when Vertex does not serve the model ([two 404/403 messages](runtimes/pi.md#per-repo-alias-overrides)), same provider only; pinned ids and sub-agent children fail loudly | Ignored with a warning |
 | Roles | All | All; `review`/`retro` at `--thinking medium` by default | Same recommendation as before — no sub-agent roster on codex |
 | Effort | `--effort low..max` | `--thinking`, same levels (`high` when unset) | `model_reasoning_effort`, same levels |
 | Tools | Native Claude permission syntax | `--tools` (strict) + a first-token Bash allowlist | Shell + `apply_patch` only; `tools:` is recorded, not enforced (the allowlist hook is opt-in) |

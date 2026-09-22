@@ -3,6 +3,7 @@ package runtime
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -1036,6 +1037,51 @@ func TestIsVertexModelUnavailable(t *testing.T) {
 	assert.False(t, isVertexModelUnavailable("authentication failed"))
 	assert.False(t, isVertexModelUnavailable("internal server error"))
 	assert.False(t, isVertexModelUnavailable(""))
+	// Model Garden enablement / wrong project is a different error class
+	// and must stay terminal.
+	assert.False(t, isVertexModelUnavailable(`403 PERMISSION_DENIED: Permission 'aiplatform.endpoints.predict' denied on resource`))
+	assert.False(t, isVertexModelUnavailable("the model is not enabled in this project's Model Garden"))
+}
+
+// TestPiVertexNotServedThroughStream feeds the captured Vertex answers
+// through parsePiStream and the attempt gate, so a change to stream
+// parsing or error redaction that stops them matching fails here.
+func TestPiVertexNotServedThroughStream(t *testing.T) {
+	for _, msg := range []string{
+		`404 {"error":{"code":404,"message":"Publisher model ` + "`projects/p/locations/global/publishers/anthropic/models/claude-opus-5`" + ` not found.","status":"NOT_FOUND"}}`,
+		`403 {"error":{"code":403,"message":"Access to this model requires data sharing to be enabled for publisher 'anthropic'.","status":"PERMISSION_DENIED"}}`,
+	} {
+		assistant := map[string]any{
+			"role": "assistant", "model": "claude-opus-5", "stopReason": "error", "errorMessage": msg,
+			"usage": map[string]any{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "cost": map[string]any{"total": 0}},
+		}
+		var lines []string
+		for _, evt := range []map[string]any{
+			{"type": "session", "version": 3, "id": "ses_404", "timestamp": "2026-09-04T12:00:00.000Z", "cwd": "/tmp"},
+			{"type": "message_end", "message": assistant},
+			{"type": "agent_end", "messages": []any{assistant}, "willRetry": false},
+		} {
+			b, err := json.Marshal(evt)
+			require.NoError(t, err)
+			lines = append(lines, string(b))
+		}
+
+		var forwarded []AgentEvent
+		gate := &piAttemptGate{next: func(evt AgentEvent) { forwarded = append(forwarded, evt) }, hold: true}
+		var last *ResultEvent
+		_, err := parsePiStream(strings.NewReader(strings.Join(lines, "\n")+"\n"), func(evt AgentEvent) {
+			if e, ok := evt.(ResultEvent); ok {
+				last = &e
+				return
+			}
+			gate.handle(evt)
+		})
+		require.NoError(t, err)
+		require.NotNil(t, last)
+		assert.Empty(t, forwarded, "a not-served attempt forwards nothing while a fallback is possible")
+		assert.True(t, piShouldFallBack(piRunResult{lastResult: last, answered: gate.answered}),
+			"captured answer must still trigger the fallback after parsing: %q", last.ErrorMessage)
+	}
 }
 
 func TestIsPiAliasedModel(t *testing.T) {
