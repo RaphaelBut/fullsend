@@ -82,20 +82,24 @@ func CleanupGitLabRoleIdentity(ctx context.Context, cfg GitLabRoleCleanupConfig)
 }
 
 // revokeGitLabIdentityTokens lists and revokes active fullsend identity
-// project access tokens. A permanently unavailable token inventory (the
-// project-access-token API is not offered on the plan, or the project no
-// longer exists) is reported as a diagnostic and treated as "nothing to
-// revoke" rather than a hard failure, since deletion can never converge
-// there. Transient/auth failures (5xx, rate limits, bad credentials)
-// still fail the call closed so the manifest entry is retried.
+// project access tokens. Only a confirmed-gone project (404) is reported
+// as a diagnostic and treated as "nothing to revoke" rather than a hard
+// failure, since deletion can never converge there. Every other listing
+// failure — including 403/Forbidden, which GitLab returns identically for
+// plan-tier feature gating, group-level PAT disablement, and insufficient
+// token permissions — fails the call closed so the manifest entry is
+// retried rather than silently reporting uninstall success while tokens
+// stay live. Operators stuck on a genuinely unsupported plan use the
+// documented manual `--manifest-only` recovery path after confirming
+// manual token revocation.
 func revokeGitLabIdentityTokens(ctx context.Context, tokens ProjectAccessTokenClient, owner, repo string) (int, string, error) {
 	if tokens == nil {
 		return 0, "", nil
 	}
 	listed, err := tokens.ListProjectAccessTokens(ctx, owner, repo)
 	if err != nil {
-		if forge.IsNotFound(err) || forge.IsForbidden(err) {
-			return 0, fmt.Sprintf("GitLab project access token inventory unavailable (%v); treating as nothing to revoke — verify manually if the plan or project no longer supports project access tokens", err), nil
+		if forge.IsNotFound(err) {
+			return 0, fmt.Sprintf("Warning: GitLab project access token inventory unavailable (%v); treating as nothing to revoke — verify manually if the project no longer exists", err), nil
 		}
 		return 0, "", fmt.Errorf("listing GitLab project tokens for uninstall: %w", err)
 	}

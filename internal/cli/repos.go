@@ -1366,9 +1366,11 @@ func runReposUninstall(ctx context.Context, opts *reposUninstallConfig, repoArgs
 	}
 
 	progressFn := func(repo, phase, msg string) {
-		switch phase {
-		case "done", "manifest":
+		switch {
+		case phase == "done" || phase == "manifest":
 			printer.StepDone(fmt.Sprintf("[%s] %s", repo, msg))
+		case strings.HasPrefix(msg, "Warning:"):
+			printer.StepWarn(fmt.Sprintf("[%s] %s", repo, msg))
 		default:
 			printer.StepInfo(fmt.Sprintf("[%s] %s", repo, msg))
 		}

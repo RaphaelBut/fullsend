@@ -956,9 +956,9 @@ func TestUninstall_GitLabRoleIdentityRevokesTokensAndSecrets(t *testing.T) {
 	}
 }
 
-func TestUninstall_GitLabRoleIdentityPermanentTokenListFailureSurfacesDiagnostic(t *testing.T) {
+func TestUninstall_GitLabRoleIdentityNotFoundTokenListFailureSurfacesDiagnostic(t *testing.T) {
 	client := newInstalledFakeGitLabClient("acme/api")
-	tokens := &fakeTokens{failList: forge.ErrForbidden}
+	tokens := &fakeTokens{failList: forge.ErrNotFound}
 
 	var progressMsgs []string
 	progress := func(_, phase, msg string) {
@@ -979,7 +979,7 @@ func TestUninstall_GitLabRoleIdentityPermanentTokenListFailureSurfacesDiagnostic
 	}
 	r := results[0]
 	if !r.Success {
-		t.Fatalf("Success = false, want true when the token list failure is permanent; Error = %v", r.Error)
+		t.Fatalf("Success = false, want true when the project is confirmed gone; Error = %v", r.Error)
 	}
 	if r.TokensRevoked != 0 {
 		t.Errorf("TokensRevoked = %d, want 0", r.TokensRevoked)
@@ -992,6 +992,38 @@ func TestUninstall_GitLabRoleIdentityPermanentTokenListFailureSurfacesDiagnostic
 	}
 	if !found {
 		t.Errorf("progress messages = %v, want a diagnostic about the unavailable token inventory", progressMsgs)
+	}
+}
+
+// A 403 from GitLab's token-list API is ambiguous — it covers plan-tier
+// feature gating, group-level PAT disablement, and insufficient token
+// permissions alike — so it must not be silently treated as "nothing to
+// revoke". Uninstall fails closed and leaves the manifest entry for retry;
+// operators on a genuinely unsupported plan use the documented manual
+// `--manifest-only` recovery path.
+func TestUninstall_GitLabRoleIdentityForbiddenTokenListFailureFailsClosed(t *testing.T) {
+	client := newInstalledFakeGitLabClient("acme/api")
+	tokens := &fakeTokens{failList: forge.ErrForbidden}
+
+	results, err := Uninstall(context.Background(), UninstallConfig{
+		Manifest:       testGitLabManifest("acme/api"),
+		Repos:          []string{"acme/api"},
+		Direct:         true,
+		MaxConcurrency: 4,
+		GitLabTokens:   tokens,
+	}, newTestClientFactory(client), uninstallCommitFn(client), nil)
+	if err != nil {
+		t.Fatalf("Uninstall() error = %v", err)
+	}
+	r := results[0]
+	if r.Success {
+		t.Fatalf("Success = true, want false when the token list is permanently forbidden")
+	}
+	if r.TokensRevoked != 0 {
+		t.Errorf("TokensRevoked = %d, want 0", r.TokensRevoked)
+	}
+	if r.Error == nil || !strings.Contains(r.Error.Error(), "listing GitLab project tokens") {
+		t.Errorf("Error = %v, want a listing-failure error", r.Error)
 	}
 }
 
