@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/fullsend-ai/fullsend/internal/forge"
+	"github.com/fullsend-ai/fullsend/internal/gitlabroles"
 	"github.com/fullsend-ai/fullsend/internal/poll"
 	"github.com/fullsend-ai/fullsend/internal/scaffold"
 )
@@ -888,6 +889,93 @@ func TestUninstall_GitLabPollStateBranches_DeleteError(t *testing.T) {
 	// Vars and secrets still deleted even when branch deletion fails.
 	if r.VarsDeleted != len(gitlabUninstallVars) {
 		t.Errorf("VarsDeleted = %d, want %d", r.VarsDeleted, len(gitlabUninstallVars))
+	}
+}
+
+func TestUninstall_GitLabRoleIdentityRevokesTokensAndSecrets(t *testing.T) {
+	client := newInstalledFakeGitLabClient("acme/api")
+	for _, name := range []string{
+		forge.SecretForgeToken,
+		forge.SecretGitLabPollerToken,
+		forge.SecretGitLabAnalystToken,
+		forge.SecretGitLabCoderToken,
+	} {
+		client.Secrets["acme/api/"+name] = true
+	}
+	client.VariableValues["acme/api/FULLSEND_GITLAB_ROLE_SCANNER_TOKEN"] = "x"
+	client.VariablesExist["acme/api/FULLSEND_GITLAB_ROLE_SCANNER_TOKEN"] = true
+	client.Secrets["acme/api/FULLSEND_GITLAB_ROLE_SCANNER_TOKEN"] = true
+
+	tokens := &fakeTokens{}
+	tokens.seed(ProjectAccessToken{ID: 1, Name: gitlabroles.PollerTokenName, Active: true})
+	tokens.seed(ProjectAccessToken{ID: 2, Name: gitlabroles.SharedTokenName, Active: true})
+	tokens.seed(ProjectAccessToken{ID: 3, Name: gitlabroles.CustomTokenName("scanner"), Active: true})
+	tokens.seed(ProjectAccessToken{ID: 4, Name: "unrelated", Active: true})
+
+	results, err := Uninstall(context.Background(), UninstallConfig{
+		Manifest:       testGitLabManifest("acme/api"),
+		Repos:          []string{"acme/api"},
+		Direct:         true,
+		MaxConcurrency: 4,
+		GitLabTokens:   tokens,
+	}, newTestClientFactory(client), uninstallCommitFn(client), nil)
+	if err != nil {
+		t.Fatalf("Uninstall() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	r := results[0]
+	if !r.Success {
+		t.Fatalf("Success = false, want true; Error = %v", r.Error)
+	}
+	if r.TokensRevoked != 3 {
+		t.Errorf("TokensRevoked = %d, want 3", r.TokensRevoked)
+	}
+	if r.VarsDeleted != len(gitlabUninstallVars)+1 {
+		t.Errorf("VarsDeleted = %d, want %d", r.VarsDeleted, len(gitlabUninstallVars)+1)
+	}
+	for _, name := range []string{
+		forge.SecretForgeToken,
+		forge.SecretGitLabPollerToken,
+		forge.VarGitLabRoleMigration,
+		"FULLSEND_GITLAB_ROLE_SCANNER_TOKEN",
+	} {
+		if _, still := client.VariableValues["acme/api/"+name]; still {
+			t.Errorf("variable %s still present after uninstall", name)
+		}
+		if client.Secrets["acme/api/"+name] {
+			t.Errorf("secret %s still present after uninstall", name)
+		}
+	}
+	if !containsInt(tokens.revoked, 1) || !containsInt(tokens.revoked, 2) || !containsInt(tokens.revoked, 3) {
+		t.Errorf("revoked = %v, want 1,2,3", tokens.revoked)
+	}
+	if containsInt(tokens.revoked, 4) {
+		t.Errorf("revoked unrelated token: %v", tokens.revoked)
+	}
+}
+
+func TestUninstall_GitLabRoleIdentityRevokeFailureKeepsError(t *testing.T) {
+	client := newInstalledFakeGitLabClient("acme/api")
+	tokens := &fakeTokens{failRevoke: fmt.Errorf("busy")}
+	tokens.seed(ProjectAccessToken{ID: 1, Name: gitlabroles.PollerTokenName, Active: true})
+
+	results, err := Uninstall(context.Background(), UninstallConfig{
+		Manifest:       testGitLabManifest("acme/api"),
+		Repos:          []string{"acme/api"},
+		Direct:         true,
+		MaxConcurrency: 4,
+		GitLabTokens:   tokens,
+	}, newTestClientFactory(client), uninstallCommitFn(client), nil)
+	if err != nil {
+		t.Fatalf("Uninstall() error = %v", err)
+	}
+	if results[0].Success {
+		t.Fatal("Success = true, want false when identity token revocation fails")
+	}
+	if results[0].Error == nil || !strings.Contains(results[0].Error.Error(), "revoking GitLab identity token") {
+		t.Errorf("Error = %v, want identity token revocation failure", results[0].Error)
 	}
 }
 

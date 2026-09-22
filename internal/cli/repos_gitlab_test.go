@@ -1438,3 +1438,53 @@ func TestAnnotateGitLabRoleLifecycleDoesNotDoubleCountDrifted(t *testing.T) {
 		assert.Equal(t, 1, result.Summary.Drifted, "no-drift to drift transition must be counted exactly once")
 	})
 }
+
+func TestGitLabUninstallTokens(t *testing.T) {
+	manifest := &repos.Manifest{
+		Version: 1,
+		GitLab: &repos.PlatformConfig{
+			Repos: []repos.RepoEntry{{Name: "group/project"}},
+		},
+	}
+
+	t.Run("test hook wins", func(t *testing.T) {
+		hook := cliCutoverTokens{}
+		got := gitLabUninstallTokens(&reposUninstallConfig{testGitLabTokens: hook}, nil, manifest, []string{"group/project"})
+		assert.Equal(t, hook, got)
+	})
+
+	t.Run("fake client is not live inventory", func(t *testing.T) {
+		got := gitLabUninstallTokens(&reposUninstallConfig{}, newSingleClientFactory(forge.NewFakeClient()), manifest, []string{"group/project"})
+		assert.Nil(t, got)
+	})
+
+	t.Run("github-only repos skip inventory", func(t *testing.T) {
+		gh := &repos.Manifest{
+			Version: 1,
+			GitHub: &repos.PlatformConfig{
+				Repos: []repos.RepoEntry{{Name: "acme/api"}},
+			},
+		}
+		got := gitLabUninstallTokens(&reposUninstallConfig{}, newSingleClientFactory(forge.NewFakeClient()), gh, []string{"acme/api"})
+		assert.Nil(t, got)
+	})
+
+	t.Run("nil factory or manifest", func(t *testing.T) {
+		assert.Nil(t, gitLabUninstallTokens(&reposUninstallConfig{}, nil, manifest, []string{"group/project"}))
+		assert.Nil(t, gitLabUninstallTokens(&reposUninstallConfig{}, newSingleClientFactory(forge.NewFakeClient()), nil, []string{"group/project"}))
+	})
+
+	t.Run("skips names without a slash", func(t *testing.T) {
+		got := gitLabUninstallTokens(&reposUninstallConfig{}, newSingleClientFactory(forge.NewFakeClient()), manifest, []string{"not-a-repo"})
+		assert.Nil(t, got)
+	})
+
+	t.Run("live gitlab client is wrapped", func(t *testing.T) {
+		glClient, err := gitlab.New("test-token", gitlab.WithBaseURL("http://127.0.0.1:1"))
+		require.NoError(t, err)
+		got := gitLabUninstallTokens(&reposUninstallConfig{}, newSingleClientFactory(glClient), manifest, []string{"group/project"})
+		require.NotNil(t, got)
+		_, ok := got.(gitlabTokenAdapter)
+		assert.True(t, ok)
+	})
+}

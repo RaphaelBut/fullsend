@@ -788,3 +788,35 @@ func cleanupGitLabBotToken(ctx context.Context, glClient *gitlab.LiveClient, pri
 	}
 	return nil
 }
+
+// gitLabUninstallTokens returns the project-token inventory used by
+// repos.Uninstall to revoke GitLab identity PATs. Test hooks win; live
+// GitLab clients are wrapped when at least one targeted repo is GitLab.
+func gitLabUninstallTokens(opts *reposUninstallConfig, clients repos.ForgeClientFactory, manifest *repos.Manifest, repoNames []string) repos.ProjectAccessTokenClient {
+	if opts != nil && opts.testGitLabTokens != nil {
+		return opts.testGitLabTokens
+	}
+	if clients == nil || manifest == nil {
+		return nil
+	}
+	for _, fullName := range repoNames {
+		owner, name, found := strings.Cut(fullName, "/")
+		if !found {
+			continue
+		}
+		rc, ok := manifest.ResolveConfigWithGlobs(owner, name)
+		if !ok || rc.Forge != repos.ForgeGitLab {
+			continue
+		}
+		fc, err := clients.ConfigFor(repos.ForgeGitLab)
+		if err != nil {
+			return nil
+		}
+		glClient, ok := fc.Client.(*gitlab.LiveClient)
+		if !ok {
+			return nil
+		}
+		return gitlabTokenAdapter{c: glClient}
+	}
+	return nil
+}
