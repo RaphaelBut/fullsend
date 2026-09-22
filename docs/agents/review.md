@@ -74,17 +74,22 @@ behavior.
 ### Skill: `issue-labels`
 
 The review agent includes the `issue-labels` skill to discover your repo's
-labels and apply them to PRs during review. This is the same skill used by the
-[triage agent](triage.md) -- overloading it affects both agents.
+labels and apply them to PRs during review. This is the same built-in skill
+used by the [triage agent](triage.md). Unique-named repo skills extend both
+agents; overriding the built-in skill is per-agent via `base:` composition.
 
-To overload the built-in skill, create your own `issue-labels` skill in
-`.agents/skills/issue-labels/SKILL.md` and symlink `.claude/skills` to
-`.agents/skills` so it's discoverable by both fullsend and local agent tooling.
-You can also overload it at the org level using config-driven agent
-registration -- see [Bring Your Own Agent](../guides/user/bring-your-own-agent.md).
+To **extend**, add a uniquely named skill in `.agents/skills/` and symlink
+`.claude/skills` to `.agents/skills` so it is discoverable by both fullsend
+and local agent tooling. A same-named `issue-labels` skill in that directory
+is shadowed by the built-in version and is ignored.
 
-See [Configuring with AGENTS.md](../guides/user/customizing-with-agents-md.md) and
-[Configuring with Skills](../guides/user/customizing-with-skills.md).
+To **override** the built-in skill, register the review agent with a harness
+that uses `base:` composition and include your replacement `issue-labels`
+skill in the `skills:` list -- see
+[Configuring with Skills](../guides/user/customizing-with-skills.md#overriding-built-in-skills)
+and [Bring Your Own Agent](../guides/user/bring-your-own-agent.md).
+
+See [Configuring with AGENTS.md](../guides/user/customizing-with-agents-md.md).
 
 ### Variables
 
