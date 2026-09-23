@@ -632,6 +632,39 @@ func TestGitLabPollContent(t *testing.T) {
 	assert.NotContains(t, s, "tar xzf /tmp/fullsend.tar.gz")
 }
 
+// TestGitLabPollBlanksSiblingRoleSecrets guards against the poller job
+// leaving higher-privileged analyst/coder PATs (or a custom
+// FULLSEND_GITLAB_ROLE_*_TOKEN, or FULLSEND_FORGE_TOKEN once unused) sitting
+// in the process environment for its full lifetime after
+// select-gitlab-role-token.sh selects the poller credential. Mirrors
+// clearSiblingGitLabRoleSecrets in internal/cli/gitlab_role.go, applied
+// directly in the template rather than in the shared helper script (the
+// agent template still needs those siblings present until its own HMAC
+// reselect and the STAGE=fix analyst-identity lookup).
+func TestGitLabPollBlanksSiblingRoleSecrets(t *testing.T) {
+	content, err := GitLabPerRepoFile(".gitlab/ci/fullsend-poll.yml")
+	require.NoError(t, err)
+	s := string(content)
+
+	selectIdx := strings.Index(s, "select-gitlab-role-token.sh")
+	require.NotEqual(t, -1, selectIdx, "expected select-gitlab-role-token.sh to be sourced")
+	unsetIdx := strings.Index(s, "unset \"${_fs_sibling}\"")
+	require.NotEqual(t, -1, unsetIdx, "expected sibling-secret unset loop")
+	pollIdx := strings.Index(s, "fullsend poll \\")
+	require.NotEqual(t, -1, pollIdx, "expected fullsend poll invocation")
+
+	assert.Less(t, selectIdx, unsetIdx, "sibling secrets must be blanked after role selection")
+	assert.Less(t, unsetIdx, pollIdx, "sibling secrets must be blanked before running fullsend poll")
+
+	// Only unset for migrating/enforced; disabled/rollback share one token
+	// across every role so there is nothing to blank.
+	assert.Contains(t, s, "migrating|enforced")
+	// Covers the builtin roles, any custom registered role, and the
+	// shared fallback token — but never the credential this job selected.
+	assert.Contains(t, s, "FULLSEND_(GITLAB_(ANALYST|CODER|POLLER|ROLE_[A-Z0-9_]+)_TOKEN|FORGE_TOKEN)")
+	assert.Contains(t, s, `"${_fs_sibling}" != "${FULLSEND_JOB_TOKEN_NAME:-}"`)
+}
+
 func TestGitLabRootPipelineContent(t *testing.T) {
 	content, err := GitLabPerRepoFile(".gitlab-ci.yml")
 	require.NoError(t, err)
