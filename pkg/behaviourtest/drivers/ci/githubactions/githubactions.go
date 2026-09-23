@@ -908,27 +908,32 @@ func (d *Driver) harnessPollOnce(ctx context.Context, remaining time.Duration, o
 				if candidate.Conclusion == "success" {
 					return candidate, true, nil
 				}
+				// The harness workflow uploads fullsend-{agent} with
+				// if: always(), so a dual-dispatch sibling — cancelled,
+				// skipped, or a genuine failure — can produce this
+				// artifact while a later run for the same agent is
+				// still going or has already succeeded.
+				// selectRepositoryArtifactAfter only returns the single
+				// highest-ID matching artifact, and artifact IDs are
+				// assigned at upload time — if the non-success run
+				// finishes uploading after the successful run, its
+				// artifact keeps winning that selection on every poll,
+				// hiding the success artifact from this branch
+				// entirely. Scan the other matching artifacts for one
+				// whose run already completed successfully before
+				// deciding how to treat this artifact's conclusion —
+				// otherwise a cancelled/skipped artifact that keeps
+				// winning the max-ID selection would hide a
+				// lower-ID success forever, since the early return
+				// below never reaches this scan.
+				if success := d.harnessArtifactRunSuccess(ctx, owner, repo, arts, artifactName, after, art.ID, lookupErrs); success != nil {
+					return success, true, nil
+				}
 				// Cancelled/skipped runs are concurrency-group noise —
 				// the superseding run will produce its own artifact.
 				// Keep polling without a fail-fast scan this round.
 				if isConcurrencySuperseded(candidate.Conclusion) {
 					return nil, false, nil
-				}
-				// The harness workflow uploads fullsend-{agent} with
-				// if: always(), so a dual-dispatch sibling that
-				// concludes failure can produce this artifact while a
-				// later run for the same agent is still going or has
-				// already succeeded. selectRepositoryArtifactAfter only
-				// returns the single highest-ID matching artifact, and
-				// artifact IDs are assigned at upload time — if the
-				// failed run finishes uploading after the successful
-				// run, its artifact keeps winning that selection on
-				// every poll, hiding the success artifact from this
-				// branch entirely. Scan the other matching artifacts for
-				// one whose run already completed successfully before
-				// falling back to the supersede check on this one.
-				if success := d.harnessArtifactRunSuccess(ctx, owner, repo, arts, artifactName, after, art.ID, lookupErrs); success != nil {
-					return success, true, nil
 				}
 				// Apply the same supersede check as the recentRuns
 				// job-scan branch below (#7574) before treating this
@@ -982,10 +987,13 @@ func (d *Driver) harnessPollOnce(ctx context.Context, remaining time.Duration, o
 // workflow run. selectRepositoryArtifactAfter only ever returns the single
 // highest-ID artifact for a given name, but the harness workflow uploads
 // fullsend-{agent} with if: always(), so a dual-dispatch sibling that
-// concludes failure can win that selection over an already-succeeded run's
-// own artifact whenever the failure finishes uploading later (#7574). This
-// scan finds that hidden success without waiting for its artifact to
-// eventually outrank the failure's by ID, which it may never do.
+// concludes failure, cancelled, or skipped can win that selection over an
+// already-succeeded run's own artifact whenever the non-success run
+// finishes uploading later (#7574). This scan finds that hidden success
+// without waiting for its artifact to eventually outrank the other run's
+// by ID, which it may never do — including when the higher-ID artifact
+// belongs to a cancelled/skipped run, which would otherwise keep winning
+// the max-ID selection on every poll and hide the success forever.
 func (d *Driver) harnessArtifactRunSuccess(ctx context.Context, owner, repo string, arts []forge.RepositoryArtifact, name string, after time.Time, skipID int, lookupErrs *pollErrors) *forge.WorkflowRun {
 	for _, art := range arts {
 		if art.Name != name || art.ID == skipID {

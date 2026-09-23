@@ -841,6 +841,80 @@ func TestWaitForHarnessAgent_SkipsSkippedRunArtifact(t *testing.T) {
 	assert.Equal(t, 200, run.ID)
 }
 
+// TestWaitForHarnessAgent_CancelledMaxIDArtifactHidesLowerIDSuccess
+// verifies that the hidden-success scan (harnessArtifactRunSuccess) still
+// runs when the highest-ID matching artifact belongs to a cancelled or
+// skipped run. Before this fix, isConcurrencySuperseded returned early
+// without ever scanning the other artifacts, so a cancelled/skipped run
+// whose artifact happened to have a higher ID than an already-succeeded
+// run's artifact would hide that success forever instead of just for one
+// poll.
+func TestWaitForHarnessAgent_CancelledMaxIDArtifactHidesLowerIDSuccess(t *testing.T) {
+	t.Parallel()
+
+	after := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fake := forge.NewFakeClient()
+	// Run 100 is cancelled but its artifact (ID 20) has a higher ID than
+	// run 200's already-succeeded artifact (ID 10) — e.g. the cancelled
+	// run's if: always() upload finished after the success run's.
+	fake.WorkflowRuns = map[string]*forge.WorkflowRun{
+		"org/repo/cancelled": {
+			ID: 100, Status: "completed", Conclusion: "cancelled",
+			CreatedAt: "2026-01-02T00:00:00Z",
+			HTMLURL:   "https://github.com/org/repo/actions/runs/100",
+		},
+		"org/repo/success": {
+			ID: 200, Status: "completed", Conclusion: "success",
+			CreatedAt: "2026-01-02T00:01:00Z",
+		},
+	}
+	fake.RepositoryArtifacts = map[string][]forge.RepositoryArtifact{
+		"org/repo": {
+			{ID: 10, Name: "fullsend-review", CreatedAt: "2026-01-02T00:01:30Z", WorkflowRunID: 200},
+			{ID: 20, Name: "fullsend-review", CreatedAt: "2026-01-02T00:02:00Z", WorkflowRunID: 100},
+		},
+	}
+
+	d := &Driver{Client: fake, afterFunc: instantAfter}
+	run, err := d.WaitForHarnessAgent(context.Background(), "org", "repo", "review", after)
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	assert.Equal(t, 200, run.ID)
+}
+
+// TestWaitForHarnessAgent_SkippedMaxIDArtifactHidesLowerIDSuccess mirrors
+// TestWaitForHarnessAgent_CancelledMaxIDArtifactHidesLowerIDSuccess for a
+// "skipped" conclusion, which is also concurrency-group noise.
+func TestWaitForHarnessAgent_SkippedMaxIDArtifactHidesLowerIDSuccess(t *testing.T) {
+	t.Parallel()
+
+	after := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fake := forge.NewFakeClient()
+	fake.WorkflowRuns = map[string]*forge.WorkflowRun{
+		"org/repo/skipped": {
+			ID: 100, Status: "completed", Conclusion: "skipped",
+			CreatedAt: "2026-01-02T00:00:00Z",
+			HTMLURL:   "https://github.com/org/repo/actions/runs/100",
+		},
+		"org/repo/success": {
+			ID: 200, Status: "completed", Conclusion: "success",
+			CreatedAt: "2026-01-02T00:01:00Z",
+		},
+	}
+	fake.RepositoryArtifacts = map[string][]forge.RepositoryArtifact{
+		"org/repo": {
+			{ID: 10, Name: "fullsend-review", CreatedAt: "2026-01-02T00:01:30Z", WorkflowRunID: 200},
+			{ID: 20, Name: "fullsend-review", CreatedAt: "2026-01-02T00:02:00Z", WorkflowRunID: 100},
+		},
+	}
+
+	d := &Driver{Client: fake, afterFunc: instantAfter}
+	run, err := d.WaitForHarnessAgent(context.Background(), "org", "repo", "review", after)
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	assert.Equal(t, 200, run.ID)
+}
+
 func TestWaitForHarnessAgent_IgnoresRunsBeforeTriggerTime(t *testing.T) {
 	t.Parallel()
 
