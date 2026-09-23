@@ -39,6 +39,19 @@ runs:
         LEVEL: ${{ inputs.level }}
       run: |
         set -euo pipefail
+        # Strip characters that could let an untrusted value (e.g. the
+        # mint's JSON error body) inject additional workflow commands into
+        # a ::error:: annotation: CR/LF, their percent-encoded forms, and
+        # literal "::" sequences. Also drops other control characters.
+        sanitize_annotation() {
+          local s=$1
+          s=${s//$'\r'/}
+          s=${s//$'\n'/ }
+          s=${s//'%0D'/}
+          s=${s//'%0A'/ }
+          s=${s//'::'/}
+          printf '%s' "$s" | tr -cd '[:print:]\t'
+        }
         if [[ -z "$MINT_URL" ]]; then
           echo "::error::FULLSEND_MINT_URL is not set"
           exit 1
@@ -61,10 +74,13 @@ runs:
           '{role: $role, repos: $repos, level: $level}')
         echo "Requesting token: role=$ROLE level=$LEVEL repos=$REPOS"
         BODY_FILE=$(mktemp)
+        trap 'rm -f "$BODY_FILE"' EXIT
         # -o / -w keep the JSON body off stdout so a failed request still
-        # yields the HTTP status in HTTP_CODE (curl -f would otherwise leave
-        # the assignment empty). --retry-all-errors keeps retrying 422.
-        HTTP_CODE=$(curl -sSf -o "$BODY_FILE" -w "%{http_code}" \
+        # yields the HTTP status in HTTP_CODE. --fail-with-body (curl >=
+        # 7.76, present on GitHub-hosted runners) still writes the response
+        # body to BODY_FILE on a non-2xx status, unlike plain -f/--fail,
+        # which discards it. --retry-all-errors keeps retrying 422.
+        HTTP_CODE=$(curl -sS --fail-with-body -o "$BODY_FILE" -w "%{http_code}" \
           --retry 5 --retry-delay 5 --retry-all-errors \
           -H "Authorization: Bearer $OIDC_TOKEN" \
           -H "Content-Type: application/json" \
@@ -72,17 +88,17 @@ runs:
           "${MINT_URL}/v1/token") || {
           if [[ "$HTTP_CODE" == "422" ]]; then
             MINT_ERROR=$(jq -r '.error // empty' "$BODY_FILE" 2>/dev/null || true)
+            MINT_ERROR=$(sanitize_annotation "$MINT_ERROR")
             if [[ -n "$MINT_ERROR" ]]; then
-              echo "::error::Mint rejected the request (422): $MINT_ERROR"
+              printf '%s\n' "::error::Mint rejected the request (422): $MINT_ERROR"
             else
-              echo "::error::A 422 error code usually means that the GitHub application (fullsend-ai-${ROLE}) is not installed for the repository. Check if it is installed in certain selected repositories."
+              SAFE_ROLE=$(sanitize_annotation "$ROLE")
+              printf '%s\n' "::error::A 422 error code usually means that the GitHub application (fullsend-ai-${SAFE_ROLE}) is not installed for the repository. Check if it is installed in certain selected repositories."
             fi
           fi
-          rm -f "$BODY_FILE"
           exit 1
         }
         MINT_RESPONSE=$(cat "$BODY_FILE")
-        rm -f "$BODY_FILE"
         echo "::add-mask::$MINT_RESPONSE"
         TOKEN=$(echo "$MINT_RESPONSE" | jq -r '.token')
         if [[ -z "$TOKEN" || "$TOKEN" == "null" ]]; then
