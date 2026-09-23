@@ -198,6 +198,11 @@ func TestProbeComponents_GitLab_SkipsThinCallers(t *testing.T) {
 		t.Fatalf("GitLabPerRepoFile() error = %v", err)
 	}
 	fc.FileContents["acme/api/"+gitlabTrustScriptPath] = trustScript
+	roleScript, err := scaffold.GitLabPerRepoFile(gitlabRoleTokenScriptPath)
+	if err != nil {
+		t.Fatalf("GitLabPerRepoFile() error = %v", err)
+	}
+	fc.FileContents["acme/api/"+gitlabRoleTokenScriptPath] = roleScript
 	fc.VariableValues["acme/api/"+forge.VarLastPollAtFast] = "2026-01-01T00:00:00Z"
 	fc.VariableValues["acme/api/"+forge.VarLastPollAtFull] = "2026-01-01T00:00:00Z"
 	fc.VariableValues["acme/api/"+forge.VarLabelState] = "{}"
@@ -253,6 +258,25 @@ func TestProbeComponents_GitLab_MissingTrustScript(t *testing.T) {
 		}
 	}
 	t.Fatalf("missing trust script component not found: %+v", components)
+}
+
+func TestProbeComponents_GitLab_MissingRoleTokenScript(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.FileContents["acme/api/.gitlab/ci/fullsend-dispatch.yml"] = []byte("include:")
+
+	components, err := ProbeComponents(context.Background(), fc, "acme", "api", ForgeGitLab, GitLabForgeConfig(), nil)
+	if err != nil {
+		t.Fatalf("ProbeComponents() error = %v", err)
+	}
+	for _, c := range components {
+		if c.Name == "scaffold:"+gitlabRoleTokenScriptPath {
+			if c.Present || c.Match {
+				t.Fatalf("missing role-token script component = %+v", c)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing role-token script component not found: %+v", components)
 }
 
 func TestProbeComponents_GitLab_MissingSchedules(t *testing.T) {

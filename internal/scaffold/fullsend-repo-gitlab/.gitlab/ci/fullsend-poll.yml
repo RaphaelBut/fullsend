@@ -117,12 +117,11 @@ spec:
         exit 1
       fi
 
-      # Bot token from FULLSEND_FORGE_TOKEN CI/CD variable (per ADR-0067).
-
-      if [ -z "${FULLSEND_FORGE_TOKEN:-}" ]; then
-        echo "ERROR: FULLSEND_FORGE_TOKEN is not set — ensure the protected CI/CD variable is configured"
-        exit 1
-      fi
+      # Bot token from the registered Poller credential when the
+      # migration gate is migrating/enforced; otherwise the shared
+      # FULLSEND_FORGE_TOKEN (ADR-0067 / gitlab-role-credentials.md).
+      FULLSEND_JOB_KIND=poller
+      . "${CI_PROJECT_DIR:-.}/.gitlab/ci/scripts/select-gitlab-role-token.sh"
 
       # Validate FULLSEND_POLL_MODE before use in URLs and commands.
       case "${FULLSEND_POLL_MODE:-events}" in
@@ -144,7 +143,7 @@ spec:
       fi
       curl -sf --retry 2 --retry-delay 1 --retry-all-errors \
         -X PUT "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/resource_groups/fullsend-poll-${FULLSEND_POLL_MODE:-events}" \
-        -H "PRIVATE-TOKEN: ${FULLSEND_FORGE_TOKEN}" \
+        -H "PRIVATE-TOKEN: ${FULLSEND_JOB_TOKEN}" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "process_mode=${PROCESS_MODE}" > /dev/null 2>&1 || true
 
