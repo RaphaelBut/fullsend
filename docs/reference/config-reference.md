@@ -216,7 +216,9 @@ collaborator API always applies; a provider listed here is checked first.
 The only provider is `owners_file`:
 
 - An `approvers` entry in the repo-root `OWNERS` file gets write-level access
-  (every slash command). A `reviewers` entry gets triage-level access.
+  (every slash command and custom agent). A `reviewers` entry gets
+  triage-level access, which covers `/fs-triage` and `/fs-review` only:
+  custom agents under `agents:` still require write.
 - An entry that names a key in `OWNERS_ALIASES` stands for that alias's
   members. A GitHub login equal to any alias key never matches, and nested
   aliases are not expanded.

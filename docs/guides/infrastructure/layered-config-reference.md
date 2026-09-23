@@ -421,8 +421,10 @@ backends. Currently one provider is supported:
   equal to any alias key never matches, and nested aliases are not
   expanded.
 
-This applies to both the bash routing path (built-in stages) and the
-Go harness-dispatch path (custom agents). A missing or malformed `OWNERS`
+Both the bash routing path (built-in stages) and the Go harness-dispatch
+path (custom agents) consult OWNERS. The Go path admits write-level roles
+only, so a reviewer's triage-level grant covers built-in observation stages
+(`/fs-triage`, `/fs-review`) but not custom agents. A missing or malformed `OWNERS`
 file, or a malformed `OWNERS_ALIASES` file, fails closed: the OWNERS check is
 skipped and authorization falls through to the collaborator API.
 
