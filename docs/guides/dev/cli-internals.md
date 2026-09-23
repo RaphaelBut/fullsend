@@ -556,9 +556,11 @@ Vendoring commit messages use title + body (upload and stale delete). `github st
 │  │                   │ instead of pushing (known limitation,    │
 │  │                   │ see #5393).                              │
 │  │                   │                                          │
-│  │                   │ FULLSEND_VALIDATED_ITERATION_DIR points  │
-│  │                   │ to the validated iteration's output dir, │
-│  │                   │ for forward compatibility. The scaffold- │
+│  │                   │ FULLSEND_VALIDATED_ITERATION_DIR is an   │
+│  │                   │ absolute path to the validated           │
+│  │                   │ iteration's output dir (independent of   │
+│  │                   │ cwd / a relative --output-dir), for      │
+│  │                   │ forward compatibility. The scaffold-     │
 │  │                   │ embedded post-scripts don't consume it   │
 │  │                   │ yet (tracked in fullsend-ai/agents#411)  │
 │  │                   │ — they still scan for the last iteration │

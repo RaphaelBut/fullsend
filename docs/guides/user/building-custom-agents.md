@@ -404,9 +404,10 @@ for the full preference order and sanitization rules.
 set -euo pipefail
 
 # Prefer the validated iteration directory set by the harness
-# (FULLSEND_VALIDATED_ITERATION_DIR) — without it, scanning for the last
-# iteration can pick up output that failed validation. Fall back to
-# scanning for the last iteration for harnesses with no validation_loop.
+# (FULLSEND_VALIDATED_ITERATION_DIR, always an absolute path) — without
+# it, scanning for the last iteration can pick up output that failed
+# validation. Fall back to scanning for the last iteration for
+# harnesses with no validation_loop.
 if [[ -n "${FULLSEND_VALIDATED_ITERATION_DIR:-}" ]]; then
   RESULT_FILE="${FULLSEND_VALIDATED_ITERATION_DIR}/agent-result.json"
 else

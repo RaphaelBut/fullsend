@@ -76,7 +76,10 @@ harness's skills have been read — so the sandbox exists but the agent has not 
 
 ## Output artifacts
 
-Each run produces artifacts in the output directory:
+Each run produces artifacts in the output directory. Relative `--output-dir`
+values are resolved to an absolute path before the run directory is created, so
+`FULLSEND_VALIDATED_ITERATION_DIR` (injected into the post-script) does not
+depend on the process cwd.
 
 | File | Description |
 |------|-------------|

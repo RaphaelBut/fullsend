@@ -3381,8 +3381,103 @@ func TestPostScriptRepoEnv(t *testing.T) {
 			repoDir, iterDir := postScriptRepoEnv(tt.h, runDir, hostRepoDir, tt.repoExtractedOK, tt.validatedIterNum)
 			assert.Equal(t, tt.wantRepoDir, repoDir, "REPO_DIR")
 			assert.Equal(t, tt.wantIterDir, iterDir, "FULLSEND_VALIDATED_ITERATION_DIR")
+			if repoDir != "" {
+				assert.True(t, filepath.IsAbs(repoDir), "REPO_DIR must be absolute, got %q", repoDir)
+			}
+			if iterDir != "" {
+				assert.True(t, filepath.IsAbs(iterDir), "FULLSEND_VALIDATED_ITERATION_DIR must be absolute, got %q", iterDir)
+			}
 		})
 	}
+}
+
+func TestResolveOutputBase(t *testing.T) {
+	t.Run("empty uses temp dir and is absolute", func(t *testing.T) {
+		got, err := resolveOutputBase("")
+		require.NoError(t, err)
+		assert.True(t, filepath.IsAbs(got))
+		assert.Equal(t, filepath.Join(os.TempDir(), "fullsend"), got)
+	})
+
+	t.Run("relative becomes absolute against cwd", func(t *testing.T) {
+		cwd := t.TempDir()
+		t.Chdir(cwd)
+		got, err := resolveOutputBase("rel-output")
+		require.NoError(t, err)
+		assert.True(t, filepath.IsAbs(got))
+		assert.Equal(t, filepath.Join(cwd, "rel-output"), got)
+	})
+
+	t.Run("absolute is unchanged", func(t *testing.T) {
+		abs := filepath.Join(t.TempDir(), "out")
+		got, err := resolveOutputBase(abs)
+		require.NoError(t, err)
+		assert.Equal(t, abs, got)
+	})
+}
+
+func TestPostScriptRepoEnv_RelativeOutputBaseYieldsAbsoluteIterDir(t *testing.T) {
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	absBase, err := resolveOutputBase("rel-output")
+	require.NoError(t, err)
+	require.True(t, filepath.IsAbs(absBase))
+
+	runDir := filepath.Join(absBase, "fs-test-sandbox")
+	hostRepoDir := filepath.Join(t.TempDir(), "host-repo")
+	withLoop := &harness.Harness{ValidationLoop: &harness.ValidationLoop{Script: "validate.sh"}}
+	noLoop := &harness.Harness{}
+
+	t.Run("validation loop", func(t *testing.T) {
+		repoDir, iterDir := postScriptRepoEnv(withLoop, runDir, hostRepoDir, true, 2)
+		assert.Equal(t, hostRepoDir, repoDir)
+		assert.True(t, filepath.IsAbs(repoDir), "REPO_DIR must be absolute, got %q", repoDir)
+		assert.True(t, filepath.IsAbs(iterDir), "FULLSEND_VALIDATED_ITERATION_DIR must be absolute, got %q", iterDir)
+		assert.Equal(t, filepath.Join(runDir, "iteration-2/output"), iterDir)
+	})
+
+	t.Run("no validation loop", func(t *testing.T) {
+		repoDir, iterDir := postScriptRepoEnv(noLoop, runDir, hostRepoDir, true, 3)
+		assert.Equal(t, hostRepoDir, repoDir)
+		assert.True(t, filepath.IsAbs(repoDir), "REPO_DIR must be absolute, got %q", repoDir)
+		assert.Empty(t, iterDir, "FULLSEND_VALIDATED_ITERATION_DIR is unset without a validation loop")
+	})
+}
+
+func TestRunAgent_RelativeOutputDirResolvesBeforeGateway(t *testing.T) {
+	// Fails at CheckGateway (fake openshell) after resolveOutputBase, so a
+	// relative --output-dir is exercised without waiting on sandbox create.
+	useFakeOpenshell(t)
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "harness"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "agents", "code.md"),
+		[]byte("You are a coding agent."),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "harness", "code.yaml"),
+		[]byte("agent: agents/code.md\nrole: test\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "config.yaml"),
+		[]byte("agents:\n  - harness/code.yaml\n"),
+		0o644,
+	))
+
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	rFlags := resolveFlags{maxDepth: 10, maxResources: 50}
+	printer := ui.New(io.Discard)
+	repoDir := t.TempDir()
+	err := runAgent(context.Background(), "code", dir, "rel-out", repoDir, "", nil, false, "", "", "", rFlags, statusOpts{}, printer, false, runOverrideFlags{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "openshell")
+	assert.NotContains(t, err.Error(), "resolving output dir")
 }
 
 func TestOpenTeeReader_EmptyPath(t *testing.T) {
