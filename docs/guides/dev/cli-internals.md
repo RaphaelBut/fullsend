@@ -449,11 +449,13 @@ Vendoring commit messages use title + body (upload and stale delete). `github st
 │  ┌──────────────────────────────────────────┐                   │
 │  │ bootstrapSandbox()                       │                   │
 │  │                                          │                   │
-│  │  Upload to /sandbox/workspace:           │                   │
+│  │  UploadDir (tar) to /sandbox/workspace:  │                   │
 │  │  ├── fullsend binary (cross-compiled)    │                   │
-│  │  ├── agent definition file               │                   │
 │  │  ├── skills/ directory                   │                   │
-│  │  ├── plugins/ directory                  │                   │
+│  │  └── plugins/ directory                  │                   │
+│  │                                          │                   │
+│  │  Upload (single file):                   │                   │
+│  │  ├── agent definition file               │                   │
 │  │  ├── host_files (expanded ${VAR} paths)  │                   │
 │  │  ├── .env file (bootstrapEnv)            │                   │
 │  │  └── security hooks                      │                   │
@@ -472,7 +474,7 @@ Vendoring commit messages use title + body (upload and stale delete). `github st
 │  └──────────┬───────────────────────────────┘                   │
 │             ▼                                                   │
 │  ┌──────────────────┐                                           │
-│  │ Copy source code  │ Upload target repo to sandbox            │
+│  │ Copy source code  │ UploadDir() tar of target repo           │
 │  └──────┬───────────┘                                           │
 │         ▼                                                       │
 │  ┌──────────────────┐                                           │
@@ -601,6 +603,7 @@ details, see [Agent runtimes](../../runtimes.md).
 | `Exec()` | `openshell sandbox exec ...` | Run command in sandbox |
 | `ExecStreamReader()` | `openshell sandbox exec ...` | Streaming stdout reader |
 | `Upload()` | `openshell sandbox upload ...` | Copy files into sandbox |
+| `UploadDir()` | tar -czf + Upload + Exec extract | Copy directory preserving symlinks |
 | `Download()` | `openshell sandbox download ...` | Copy files out of sandbox |
 | `SafeDownload()` | Download + sanitize | Remove dangerous symlinks (absolute or repo-escaping), .git/hooks |
 | `CollectLogs()` | Download logs dir | Extract sandbox logs |
