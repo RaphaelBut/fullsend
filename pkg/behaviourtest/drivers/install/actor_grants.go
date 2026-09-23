@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/fullsend-ai/fullsend/internal/e2etest"
 	"github.com/fullsend-ai/fullsend/internal/forge"
@@ -22,6 +23,12 @@ var actorGrantEnv = []struct{ patEnv, permission string }{
 	{"TEST_ACTOR_WRITE_PAT", "push"},
 	{"TEST_ACTOR_TRIAGE_PAT", "triage"},
 }
+
+// grantMaxAttempts and grantRetryDelay bound the retries while a freshly
+// created repo is not yet visible to the collaborator API (it answers 404).
+const grantMaxAttempts = 6
+
+var grantRetryDelay = time.Second
 
 // actorGrantsFromEnv resolves the login behind each actor PAT that is set.
 // An actor whose login cannot be resolved is logged and skipped.
@@ -53,10 +60,28 @@ func (e *repoEnsurer) grantActors(ctx context.Context, org, repoName string) err
 		return fmt.Errorf("granting test actors on %s/%s: forge client has no collaborator API", org, repoName)
 	}
 	for _, g := range e.actorGrants {
-		if err := gh.AddCollaborator(ctx, org, repoName, g.login, g.permission); err != nil {
+		if err := e.addCollaboratorWithRetry(ctx, gh, org, repoName, g); err != nil {
 			return fmt.Errorf("granting %s %s on %s/%s: %w", g.login, g.permission, org, repoName, err)
 		}
 		e.logf("[ensure] granted %s %s on %s/%s", g.login, g.permission, org, repoName)
 	}
 	return nil
+}
+
+func (e *repoEnsurer) addCollaboratorWithRetry(ctx context.Context, gh forge.GitHubExtensions, org, repoName string, g actorGrant) error {
+	delay := grantRetryDelay
+	for attempt := 1; ; attempt++ {
+		err := gh.AddCollaborator(ctx, org, repoName, g.login, g.permission)
+		if err == nil || !forge.IsNotFound(err) || attempt == grantMaxAttempts {
+			return err
+		}
+		e.logf("[ensure] %s/%s not visible to the collaborator API yet, attempt %d/%d — backing off %v",
+			org, repoName, attempt, grantMaxAttempts, delay)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
 }
