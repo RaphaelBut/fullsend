@@ -238,7 +238,8 @@ func callMint(ctx context.Context, mintURL, oidcJWT string, req MintRequest) (*M
 	}
 
 	if statusCode != http.StatusOK {
-		return nil, mintStatusError(statusCode, body, req.Role)
+		excerpt := truncateBody(body, 200)
+		return nil, fmt.Errorf("mint returned HTTP %d: %s", statusCode, excerpt)
 	}
 
 	var result MintResult
@@ -251,22 +252,6 @@ func callMint(ctx context.Context, mintURL, oidcJWT string, req MintRequest) (*M
 	}
 
 	return &result, nil
-}
-
-// hostedAppSlug is the conventional GitHub App slug for a role on the
-// hosted fullsend mint (app set "fullsend-ai"). Used only in 422
-// diagnostics; custom app sets may differ, which is why the message
-// says "usually means".
-func hostedAppSlug(role string) string {
-	return "fullsend-ai-" + role
-}
-
-func mintStatusError(statusCode int, body []byte, role string) error {
-	excerpt := truncateBody(body, 200)
-	if statusCode == http.StatusUnprocessableEntity {
-		return fmt.Errorf("mint returned HTTP %d: %s. A 422 error code usually means that the GitHub application (%s) is not installed for the repository. Check if it is installed in certain selected repositories", statusCode, excerpt, hostedAppSlug(role))
-	}
-	return fmt.Errorf("mint returned HTTP %d: %s", statusCode, excerpt)
 }
 
 type retryableError struct{ error }
