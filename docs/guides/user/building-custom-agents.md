@@ -77,7 +77,8 @@ Environment variables set by the runner, present in every agent's shell:
 - `FULLSEND_ITERATION_DEADLINE` — Unix time (seconds) at which this iteration is killed;
   write your result before it (see [`fullsend run` § Budget and deadline](../../cli/run.md#budget-and-deadline))
 - `TRACEPARENT` — W3C trace context of this iteration's agent span, so runtime telemetry
-  can join the Fullsend trace (see [`fullsend run` § Budget and deadline](../../cli/run.md#budget-and-deadline))
+  can join the Fullsend trace; empty when telemetry produced no valid span context
+  (see [`fullsend run` § Budget and deadline](../../cli/run.md#budget-and-deadline))
 
 ## Process
 
