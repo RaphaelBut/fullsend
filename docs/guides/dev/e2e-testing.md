@@ -179,7 +179,10 @@ e2e testing of permission-sensitive behaviour:
 | `fstest-triage` | member | triage |
 | `fstest-outsider` | none | public read only (no collaborator grant) |
 
-Elevated access uses direct collaborator grants (not team membership). Fork repos
+Elevated access uses direct collaborator grants (not team membership). The
+behaviour suite deletes and recreates each pool repo at the start of a run, which
+drops these grants, so it re-applies the `fstest-write` and `fstest-triage` grants
+for every actor whose PAT is set. Fork repos
 (`test-repo-fork`) are intentionally excluded — they are not base/enrolled
 targets for permission grants.
 
