@@ -95,7 +95,7 @@ runs:
               printf '%s\n' "::error::Mint rejected the request (422): $MINT_ERROR"
             else
               SAFE_ROLE=$(sanitize_annotation "$ROLE")
-              printf '%s\n' "::error::A 422 error code usually means that the GitHub application (fullsend-ai-${SAFE_ROLE}) is not installed for the repository. Check if it is installed in certain selected repositories."
+              printf '%s\n' "::error::A 422 error code usually means the GitHub App configured for role \"$SAFE_ROLE\" is not installed for the repository. Check if it is installed in certain selected repositories."
             fi
           fi
           exit 1
