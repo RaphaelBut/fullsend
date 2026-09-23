@@ -1895,6 +1895,8 @@ func populateGitLabInstalled(fc *forge.FakeClient, owner, repo string) {
 	fc.FileContents[full+"/.gitlab/ci/fullsend-dispatch.yml"] = []byte("  ref: v2.5.0\n")
 	trustScript, _ := scaffold.GitLabPerRepoFile(gitlabTrustScriptPath)
 	fc.FileContents[full+"/"+gitlabTrustScriptPath] = trustScript
+	roleScript, _ := scaffold.GitLabPerRepoFile(gitlabRoleTokenScriptPath)
+	fc.FileContents[full+"/"+gitlabRoleTokenScriptPath] = roleScript
 	fc.Secrets[full+"/"+forge.SecretGCPProjectID] = true
 	fc.Secrets[full+"/"+forge.SecretGCPWIFProvider] = true
 	fc.Secrets[full+"/"+forge.SecretForgeToken] = true
@@ -1925,6 +1927,69 @@ func TestConverge_GitLab_RepairsMissingTrustScript(t *testing.T) {
 		}
 	}
 	t.Fatalf("convergence did not repair %s; files: %+v", gitlabTrustScriptPath, sc.files)
+}
+
+func TestConverge_GitLab_RepairsMissingRoleTokenScript(t *testing.T) {
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	delete(fc.FileContents, "acme/api/"+gitlabRoleTokenScriptPath)
+
+	sc := &spyScaffoldCommit{}
+	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 0 {
+		t.Fatalf("unexpected failure: %v", result.Failed()[0].Error)
+	}
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	for _, f := range sc.files {
+		if f.Path == gitlabRoleTokenScriptPath {
+			return
+		}
+	}
+	t.Fatalf("convergence did not repair %s; files: %+v", gitlabRoleTokenScriptPath, sc.files)
+}
+
+func TestConverge_GitLab_RepairsStalePollTokenUsage(t *testing.T) {
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+
+	files, err := scaffold.CollectGitLabPerRepoInstallFiles(nil, "v2.5.0", "v2.5.0")
+	if err != nil {
+		t.Fatalf("CollectGitLabPerRepoInstallFiles: %v", err)
+	}
+	full := "acme/api"
+	for _, f := range files {
+		fc.FileContents[full+"/"+f.Path] = f.Content
+	}
+	fc.FileContents[full+"/.gitlab/ci/fullsend-poll.yml"] = []byte("---\n# stale poll template\nPRIVATE-TOKEN: ${FULLSEND_FORGE_TOKEN}\n")
+
+	sc := &spyScaffoldCommit{}
+	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 0 {
+		t.Fatalf("unexpected failure: %v", result.Failed()[0].Error)
+	}
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	for _, f := range sc.files {
+		if f.Path != ".gitlab/ci/fullsend-poll.yml" {
+			continue
+		}
+		body := string(f.Content)
+		if !strings.Contains(body, "select-gitlab-role-token.sh") {
+			t.Fatalf("repaired poll template missing role-token helper:\n%s", body)
+		}
+		if strings.Contains(body, "PRIVATE-TOKEN: ${FULLSEND_FORGE_TOKEN}") {
+			t.Fatalf("repaired poll template still uses FULLSEND_FORGE_TOKEN:\n%s", body)
+		}
+		return
+	}
+	t.Fatalf("convergence did not repair stale poll template; files: %+v", sc.files)
 }
 
 func TestConverge_GitLab_DoesNotSeedRetiredPollVariables(t *testing.T) {
@@ -3778,6 +3843,7 @@ func gitlabRequiredScaffoldPaths() []string {
 		".gitlab/ci/fullsend-dispatch.yml",
 		".gitlab/ci/fullsend-poll.yml",
 		".gitlab/ci/scripts/trust-ci-server-ca.sh",
+		".gitlab/ci/scripts/select-gitlab-role-token.sh",
 		".fullsend/config.yaml",
 		".gitlab-ci.yml",
 	}

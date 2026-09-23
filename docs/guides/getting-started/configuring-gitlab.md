@@ -520,9 +520,12 @@ Confirm:
   `fullsend-coder` (plus any `fullsend-role-*` tokens). On GitLab.com Free
   with `--gitlab-bot-token`, expect the dedicated PAT owner's username
   instead; no project access token is created.
-* **CI/CD variables** — `FULLSEND_FORGE_TOKEN`, `FULLSEND_DISPATCH_SECRET`,
-  `FULLSEND_GCP_PROJECT_ID`, and `FULLSEND_GCP_WIF_PROVIDER` exist and are
-  protected. Role-aware installs also provision
+* **CI/CD variables** — `FULLSEND_DISPATCH_SECRET`, `FULLSEND_GCP_PROJECT_ID`,
+  and `FULLSEND_GCP_WIF_PROVIDER` exist and are protected.
+  `FULLSEND_FORGE_TOKEN` is expected too in `disabled`, `rollback`, or a
+  `migrating` install still waiting on role credentials — but not once the
+  repo cuts over to `enforced` mode, where the unflagged install deletes it
+  (see above). Role-aware installs also provision
   `FULLSEND_GITLAB_POLLER_TOKEN`, `FULLSEND_GITLAB_ANALYST_TOKEN`, and
   `FULLSEND_GITLAB_CODER_TOKEN`; custom role enrollments may add
   `FULLSEND_GITLAB_ROLE_*_TOKEN`. Secrets are requested as masked, but GitLab
