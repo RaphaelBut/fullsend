@@ -157,7 +157,7 @@ fullsend
 │       ├── --marker <string>                #     Sticky marker for idempotent updates (HTML comment or Jira property)
 │       ├── --keep-history                   #     Append previous content as collapsed history (default true)
 │       └── --fullsend-dir <path>            #     .fullsend config directory (resolves keep_history default)
-├── post-review                              # Post PR/MR review comments to GitHub or GitLab
+├── post-review                              # Post sticky PR/MR review comments (formal review is best-effort)
 │   ├── --forge <forge>                      #   Forge backend: github (default) or gitlab
 │   ├── --base-url <url>                     #   Forge instance URL (e.g. https://gitlab.example.com)
 │   ├── --repo <owner/repo>                  #   Repository in owner/repo format
