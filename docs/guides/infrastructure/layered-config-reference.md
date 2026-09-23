@@ -417,8 +417,9 @@ backends. Currently one provider is supported:
   access; reviewers get triage-equivalent. If the user is not listed in
   OWNERS, authorization falls through to the collaborator API — OWNERS
   never blocks a collaborator who isn't in the file. An entry that names
-  an `OWNERS_ALIASES` key matches only that alias's members, never a
-  login of the same name.
+  an `OWNERS_ALIASES` key matches only that alias's members. A login
+  equal to any alias key never matches, and nested aliases are not
+  expanded.
 
 This applies to both the bash routing path (built-in stages) and the
 Go harness-dispatch path (custom agents). A missing or malformed `OWNERS`

@@ -80,6 +80,13 @@ func Resolve(ownersPath, aliasesPath, username string) (Role, error) {
 		}
 	}
 
+	// A login equal to an alias key never matches, whether the key appears in
+	// OWNERS or nested in another alias; nobody can claim an alias by
+	// registering its name. Nested aliases are not expanded.
+	if _, ok := lookupAlias(aliases.Aliases, username); ok {
+		return RoleNone, nil
+	}
+
 	if hasMember(owners.Approvers, username, aliases.Aliases) {
 		return RoleApprover, nil
 	}
@@ -90,8 +97,7 @@ func Resolve(ownersPath, aliasesPath, username string) (Role, error) {
 }
 
 // hasMember reports whether username is listed in entries. An entry that
-// names an alias key matches only that alias's members, never a login of
-// the same name, so nobody can claim an alias by registering its name.
+// names an alias key matches only that alias's members.
 func hasMember(entries []string, username string, aliases map[string][]string) bool {
 	for _, entry := range entries {
 		if members, ok := lookupAlias(aliases, entry); ok {

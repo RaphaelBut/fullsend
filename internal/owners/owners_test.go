@@ -97,6 +97,22 @@ func TestResolve(t *testing.T) {
 		assert.Equal(t, RoleNone, role)
 	})
 
+	t.Run("login equal to nested alias key is not a member", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		op := writeFile(t, dir, "OWNERS", "approvers:\n  - team-b\n")
+		ap := writeFile(t, dir, "OWNERS_ALIASES", "aliases:\n  team-b: [team-a, carol]\n  team-a: [alice]\n")
+		role, err := Resolve(op, ap, "Team-A")
+		require.NoError(t, err)
+		assert.Equal(t, RoleNone, role)
+		role, err = Resolve(op, ap, "alice")
+		require.NoError(t, err)
+		assert.Equal(t, RoleNone, role, "nested aliases are not expanded")
+		role, err = Resolve(op, ap, "carol")
+		require.NoError(t, err)
+		assert.Equal(t, RoleApprover, role)
+	})
+
 	t.Run("alias key matched case-insensitively", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()

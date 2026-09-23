@@ -181,6 +181,10 @@ jobs:
                 and (keys | length) == (keys | map(ascii_downcase) | unique | length))
                 | with_entries(.key |= ascii_downcase)' <<<"${aliases}" 2>/dev/null) || return 1
             fi
+            # A login equal to any alias key never matches (nested aliases included).
+            if [[ -n "${aliases}" ]] && jq -e --arg u "${user}" 'has($u)' <<<"${aliases}" >/dev/null 2>&1; then
+              return 1
+            fi
             while IFS= read -r entry; do
               [[ ! "${entry}" =~ ^[a-zA-Z0-9_-]+$ ]] && continue
               entry="${entry,,}"

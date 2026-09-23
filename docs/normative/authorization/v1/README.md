@@ -71,8 +71,8 @@ collaborator API:
 | _(not listed)_ | none; the collaborator API decides |
 
 OWNERS can only raise a role, never lower one. An entry that names an
-`OWNERS_ALIASES` key stands for that alias's members, never for a login of the
-same name. The files are read from the base branch for PR-scoped events and
+`OWNERS_ALIASES` key stands for that alias's members. A login equal to any alias
+key never matches, and nested aliases are not expanded. The files are read from the base branch for PR-scoped events and
 from the default branch otherwise, so a PR cannot add its author. See the
 [`authorization` field](../../../reference/config-reference.md#authorization).
 

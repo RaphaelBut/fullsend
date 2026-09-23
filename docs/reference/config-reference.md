@@ -218,7 +218,8 @@ The only provider is `owners_file`:
 - An `approvers` entry in the repo-root `OWNERS` file gets write-level access
   (every slash command). A `reviewers` entry gets triage-level access.
 - An entry that names a key in `OWNERS_ALIASES` stands for that alias's
-  members, never for a GitHub login of the same name.
+  members. A GitHub login equal to any alias key never matches, and nested
+  aliases are not expanded.
 - A user not found in `OWNERS` falls through to the collaborator API.
 - If `OWNERS` or `OWNERS_ALIASES` cannot be parsed, or two alias keys differ
   only by case, the OWNERS check is skipped and only the collaborator API
