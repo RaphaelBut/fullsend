@@ -799,6 +799,42 @@ func harnessJobSuffix(agent string) string {
 	return "Harness run (" + agent + ")"
 }
 
+// harnessJobNameMarker matches any harness matrix job name, per-agent
+// (e.g. "Harness run (triage)") or the unexpanded-matrix placeholder
+// (harnessJobPlaceholder). Its presence in a run's job list means the
+// harness dispatch job has produced matrix output — either concrete
+// per-agent jobs or a deliberate empty matrix — as opposed to a run whose
+// dispatch job is still computing the matrix, where no such job exists yet.
+const harnessJobNameMarker = "Harness run ("
+
+// matchAgentJob reports whether jobs contains the harness job for agent,
+// returning the matched job when found.
+func matchAgentJob(jobs []forge.WorkflowJob, agent string) (bool, forge.WorkflowJob) {
+	suffix := harnessJobSuffix(agent)
+	for _, j := range jobs {
+		if strings.HasSuffix(j.Name, suffix) {
+			return true, j
+		}
+	}
+	return false, forge.WorkflowJob{}
+}
+
+// harnessMatrixExpanded reports whether jobs shows that the harness
+// workflow's matrix has resolved — either into concrete per-agent
+// "Harness run (<agent>)" jobs, or into the unexpanded-matrix placeholder
+// for a deliberately empty matrix. Until one of these appears, the
+// dispatch job that computes the matrix is still running, so the absence
+// of any particular agent's job in jobs says nothing about whether that
+// agent will be scheduled.
+func harnessMatrixExpanded(jobs []forge.WorkflowJob) bool {
+	for _, j := range jobs {
+		if strings.Contains(j.Name, harnessJobNameMarker) {
+			return true
+		}
+	}
+	return false
+}
+
 // runHasAgentJob reports whether the given workflow run contains a job
 // whose name matches the harness job for agent. It also returns the
 // matched job when found, and any error from the API call.
@@ -807,13 +843,8 @@ func (d *Driver) runHasAgentJob(ctx context.Context, owner, repo string, runID i
 	if err != nil {
 		return false, forge.WorkflowJob{}, fmt.Errorf("list jobs for run %d: %w", runID, err)
 	}
-	suffix := harnessJobSuffix(agent)
-	for _, j := range jobs {
-		if strings.HasSuffix(j.Name, suffix) {
-			return true, j, nil
-		}
-	}
-	return false, forge.WorkflowJob{}, nil
+	hasJob, job := matchAgentJob(jobs, agent)
+	return hasJob, job, nil
 }
 
 // WaitForHarnessAgent waits for a successful harness-run workflow job for
@@ -926,11 +957,20 @@ func workflowRunNewer(a, b forge.WorkflowRun) bool {
 }
 
 // hasSupersedingAgentRun reports whether recentRuns contains a run newer
-// than failed that scheduled agent's harness job and is still pending or
-// has already succeeded. Dual-dispatch can leave an earlier sibling
-// concluding failure while a later run of the same agent is still going
-// or has already succeeded; fail-fast must not treat the earlier failure
-// as authoritative (#7574).
+// than failed that either has scheduled agent's harness job and is still
+// pending or has already succeeded, or cannot yet be ruled out as such.
+// Dual-dispatch can leave an earlier sibling concluding failure while a
+// later run of the same agent is still going, still expanding its job
+// matrix, or has already succeeded; fail-fast must not treat the earlier
+// failure as authoritative in any of these cases (#7574). A candidate is
+// only confirmed not to supersede once its own matrix has resolved
+// (harnessMatrixExpanded) without scheduling the agent, or it has
+// completed without doing so.
+//
+// A job-listing error on a candidate, or a candidate whose matrix has not
+// resolved yet, leaves that candidate's outcome unknown; both are treated
+// as inconclusive (return true) so the caller keeps polling instead of
+// fail-fasting on incomplete information.
 func (d *Driver) hasSupersedingAgentRun(ctx context.Context, owner, repo, agent string, failed forge.WorkflowRun, recentRuns []forge.WorkflowRun, lookupErrs *pollErrors) bool {
 	for _, other := range recentRuns {
 		if other.ID == failed.ID || !workflowRunNewer(other, failed) {
@@ -939,12 +979,15 @@ func (d *Driver) hasSupersedingAgentRun(ctx context.Context, owner, repo, agent 
 		if other.Status == "completed" && other.Conclusion != "success" {
 			continue
 		}
-		hasJob, _, err := d.runHasAgentJob(ctx, owner, repo, other.ID, agent)
+		jobs, err := d.Client.ListWorkflowRunJobs(ctx, owner, repo, other.ID)
 		lookupErrs.record(ctx, err)
 		if err != nil {
-			continue
+			return true
 		}
-		if hasJob {
+		if hasJob, _ := matchAgentJob(jobs, agent); hasJob {
+			return true
+		}
+		if other.Status != "completed" && !harnessMatrixExpanded(jobs) {
 			return true
 		}
 	}

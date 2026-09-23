@@ -1000,6 +1000,64 @@ func TestWaitForHarnessAgent_FailedRunSupersededByLaterSuccess(t *testing.T) {
 	assert.Equal(t, 200, run.ID)
 }
 
+// TestWaitForHarnessAgent_QueuedSiblingWithUnexpandedMatrixDoesNotFailFast
+// covers the #7574 remediation for the queued/unexpanded-matrix window:
+// run 100 concludes "failure" having scheduled the agent's harness job,
+// and a later run 200 is still in progress with only the dispatch job
+// that computes the matrix ("Route") visible — its own harness matrix has
+// not expanded yet, so it is not yet known whether it will schedule this
+// agent. Treating that absence as a genuine "no" would fail-fast on run
+// 100 even though run 200 goes on to succeed for the same agent.
+func TestWaitForHarnessAgent_QueuedSiblingWithUnexpandedMatrixDoesNotFailFast(t *testing.T) {
+	t.Parallel()
+
+	after := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fake := forge.NewFakeClient()
+	fake.WorkflowRunsList = map[string][]forge.WorkflowRun{
+		"org/repo/fullsend.yaml": {
+			{
+				ID: 100, Status: "completed", Conclusion: "failure",
+				CreatedAt: "2026-01-02T00:00:00Z",
+				HTMLURL:   "https://github.com/org/repo/actions/runs/100",
+			},
+			{
+				ID: 200, Status: "in_progress",
+				CreatedAt: "2026-01-02T00:01:00Z",
+			},
+		},
+	}
+	fake.WorkflowRuns = map[string]*forge.WorkflowRun{
+		"org/repo/success": {
+			ID: 200, Status: "completed", Conclusion: "success",
+			CreatedAt: "2026-01-02T00:01:00Z",
+		},
+	}
+	fake.WorkflowRunJobs = map[int][]forge.WorkflowJob{
+		100: {{ID: 1, Name: "dispatch / Harness run (triage)", Status: "completed", Conclusion: "failure"}},
+		// Run 200's matrix has not expanded yet on every fail-fast scan
+		// this test performs: only the dispatch job is visible.
+		200: {{ID: 2, Name: "dispatch / Route", Status: "in_progress"}},
+	}
+
+	client := &settlingArtifactsClient{
+		FakeClient: fake,
+		callsLeft:  1,
+		// First poll: no artifact yet, so the fail-fast scan runs and
+		// must not treat run 200's unexpanded matrix as a genuine
+		// absence of the agent's job.
+		beforeArts: nil,
+		afterArts: []forge.RepositoryArtifact{
+			{ID: 20, Name: "fullsend-triage", CreatedAt: "2026-01-02T00:02:00Z", WorkflowRunID: 200},
+		},
+	}
+
+	d := &Driver{Client: client, afterFunc: instantAfter}
+	run, err := d.WaitForHarnessAgent(context.Background(), "org", "repo", "triage", after)
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	assert.Equal(t, 200, run.ID)
+}
+
 // TestWaitForHarnessAgent_NewerSiblingWithoutAgentJobDoesNotSuppressFailFast
 // verifies that a later run that did not schedule this agent does not
 // keep polling past a genuine failure of this agent's job.
@@ -1335,6 +1393,14 @@ func TestHasSupersedingAgentRun(t *testing.T) {
 		ID: 203, Status: "in_progress",
 		CreatedAt: "2026-01-02T00:04:00Z",
 	}
+	newerQueuedUnexpanded := forge.WorkflowRun{
+		ID: 204, Status: "in_progress",
+		CreatedAt: "2026-01-02T00:05:00Z",
+	}
+	newerQueuedNoJobs := forge.WorkflowRun{
+		ID: 205, Status: "queued",
+		CreatedAt: "2026-01-02T00:06:00Z",
+	}
 
 	client := forge.NewFakeClient()
 	client.WorkflowRunJobs = map[int][]forge.WorkflowJob{
@@ -1344,6 +1410,11 @@ func TestHasSupersedingAgentRun(t *testing.T) {
 		202: {{ID: 4, Name: "dispatch / Harness run (triage)", Status: "completed", Conclusion: "failure"}},
 		50:  {{ID: 5, Name: "dispatch / Harness run (triage)", Status: "in_progress"}},
 		203: {{ID: 6, Name: "dispatch / Harness run (review)", Status: "in_progress"}},
+		// Matrix not expanded yet: only the dispatch job that computes
+		// the matrix has appeared so far.
+		204: {{ID: 7, Name: "dispatch / Route", Status: "in_progress"}},
+		// Queued run with no jobs listed at all yet.
+		205: {},
 	}
 	d := newTestDriver(client)
 	var lookupErrs pollErrors
@@ -1357,17 +1428,23 @@ func TestHasSupersedingAgentRun(t *testing.T) {
 	assert.False(t, d.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
 		[]forge.WorkflowRun{olderInProgress, failed}, &lookupErrs), "older in-progress run is not newer")
 	assert.False(t, d.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
-		[]forge.WorkflowRun{failed, newerOtherAgent}, &lookupErrs), "newer run for a different agent")
+		[]forge.WorkflowRun{failed, newerOtherAgent}, &lookupErrs), "newer run for a different agent: matrix expanded without this agent")
 	assert.False(t, d.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
 		[]forge.WorkflowRun{failed}, &lookupErrs), "no other runs")
+	assert.True(t, d.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
+		[]forge.WorkflowRun{failed, newerQueuedUnexpanded}, &lookupErrs),
+		"newer run whose matrix has not expanded yet (only the Route job) is inconclusive, not a genuine absence")
+	assert.True(t, d.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
+		[]forge.WorkflowRun{failed, newerQueuedNoJobs}, &lookupErrs),
+		"newer queued run with no jobs listed yet is inconclusive")
 
 	errClient := forge.NewFakeClient()
 	errClient.Errors["ListWorkflowRunJobs"] = fmt.Errorf("jobs API error")
 	errDriver := newTestDriver(errClient)
 	var lookupOnErr pollErrors
-	assert.False(t, errDriver.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
+	assert.True(t, errDriver.hasSupersedingAgentRun(context.Background(), "org", "repo", "triage", failed,
 		[]forge.WorkflowRun{failed, newerInProgress}, &lookupOnErr),
-		"job-list error on the newer run is not a supersede")
+		"job-list error on the newer run is inconclusive, not a confirmed non-supersede")
 	assert.Greater(t, lookupOnErr.failed, 0)
 }
 
