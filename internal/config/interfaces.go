@@ -52,7 +52,6 @@ type ConfigReader interface {
 	StatusNotificationsReader
 	ConfigVersion() string
 	IsOrgMode() bool
-	AuthorizationOwnersFile() bool
 }
 
 // --- Mode-specific read interfaces ---
@@ -89,6 +88,9 @@ type PerRepoConfigReader interface {
 	// aliases are configured: every alias resolves through the runtime's
 	// compiled-in table.
 	ConfigModelAliases() map[string]string
+	// IsOwnersFileAuthEnabled reports whether the owners_file
+	// authorization provider is listed.
+	IsOwnersFileAuthEnabled() bool
 }
 
 // --- Write superset interfaces ---
@@ -98,7 +100,6 @@ type PerRepoConfigReader interface {
 type ConfigWriter interface {
 	ConfigReader
 	SetKillSwitch(bool)
-	SetAuthorizationOwnersFile(bool)
 	SetAgents([]AgentEntry)
 	SetAllowedRemoteResources([]string)
 	SetStatusNotifications(*StatusNotificationConfig)
@@ -133,6 +134,7 @@ type PerRepoConfigWriter interface {
 	SetInferenceWIFProvider(string)
 	SetInferenceOpenAI(OpenAIWIFConfig)
 	SetModelAliases(map[string]string)
+	SetOwnersFileAuthEnabled(bool)
 }
 
 // --- Compile-time assertions ---
@@ -189,14 +191,6 @@ func (c *orgConfig) StatusNotifications() *StatusNotificationConfig {
 
 // SetKillSwitch sets the kill switch state.
 func (c *orgConfig) SetKillSwitch(v bool) { c.KillSwitch = v }
-
-// AuthorizationOwnersFile returns false for org configs; OWNERS
-// authorization is per-repo only.
-func (c *orgConfig) AuthorizationOwnersFile() bool { return false }
-
-// SetAuthorizationOwnersFile is a no-op for org configs; OWNERS
-// authorization is per-repo only.
-func (c *orgConfig) SetAuthorizationOwnersFile(bool) {}
 
 // SetAgents replaces the registered agent entries.
 func (c *orgConfig) SetAgents(agents []AgentEntry) { c.Agents = agents }
@@ -435,10 +429,10 @@ func (c *perRepoConfig) ConfigVersion() string {
 // IsOrgMode reports that this is a per-repo configuration.
 func (c *perRepoConfig) IsOrgMode() bool { return false }
 
-// AuthorizationOwnersFile returns whether OWNERS-file authorization is enabled.
+// IsOwnersFileAuthEnabled returns whether OWNERS-file authorization is enabled.
 // Intentionally no parent fallback: OWNERS auth is a per-repo opt-in that must
 // not be inheritable from config.base.yaml.
-func (c *perRepoConfig) AuthorizationOwnersFile() bool {
+func (c *perRepoConfig) IsOwnersFileAuthEnabled() bool {
 	for _, p := range c.Authorization {
 		if p.Provider == "owners_file" {
 			return true
@@ -626,8 +620,8 @@ func (c *perRepoConfig) ConfigModelAliases() map[string]string {
 // an explicit false is distinguishable from unset (nil) across layers.
 func (c *perRepoConfig) SetKillSwitch(v bool) { c.KillSwitch = &v }
 
-// SetAuthorizationOwnersFile enables or disables OWNERS-file authorization.
-func (c *perRepoConfig) SetAuthorizationOwnersFile(v bool) {
+// SetOwnersFileAuthEnabled enables or disables OWNERS-file authorization.
+func (c *perRepoConfig) SetOwnersFileAuthEnabled(v bool) {
 	if v {
 		for _, p := range c.Authorization {
 			if p.Provider == "owners_file" {

@@ -948,12 +948,12 @@ func TestPerRepoConfig_InferenceOpenAI_Fallback(t *testing.T) {
 	assert.Equal(t, []string{"identity_provider_id", "service_account_id"}, OpenAIWIFConfig{Audience: "a"}.Missing())
 }
 
-// --- AuthorizationOwnersFile: intentionally no parent fallback ---
+// --- IsOwnersFileAuthEnabled: intentionally no parent fallback ---
 
-func TestPerRepoConfig_AuthorizationOwnersFile_NoFallback(t *testing.T) {
+func TestPerRepoConfig_IsOwnersFileAuthEnabled_NoFallback(t *testing.T) {
 	t.Run("returns false when unset", func(t *testing.T) {
 		cfg := &perRepoConfig{}
-		assert.False(t, cfg.AuthorizationOwnersFile())
+		assert.False(t, cfg.IsOwnersFileAuthEnabled())
 	})
 
 	t.Run("does not fall through to parent", func(t *testing.T) {
@@ -961,36 +961,29 @@ func TestPerRepoConfig_AuthorizationOwnersFile_NoFallback(t *testing.T) {
 			Authorization: []AuthorizationProvider{{Provider: "owners_file"}},
 		}
 		child := &perRepoConfig{parent: parent}
-		assert.False(t, child.AuthorizationOwnersFile())
+		assert.False(t, child.IsOwnersFileAuthEnabled())
 	})
 
 	t.Run("returns true when set locally", func(t *testing.T) {
 		cfg := &perRepoConfig{
 			Authorization: []AuthorizationProvider{{Provider: "owners_file"}},
 		}
-		assert.True(t, cfg.AuthorizationOwnersFile())
+		assert.True(t, cfg.IsOwnersFileAuthEnabled())
 	})
 }
 
-func TestOrgConfig_AuthorizationOwnersFile(t *testing.T) {
-	cfg := &orgConfig{}
-	assert.False(t, cfg.AuthorizationOwnersFile())
-	cfg.SetAuthorizationOwnersFile(true)
-	assert.False(t, cfg.AuthorizationOwnersFile())
-}
-
-func TestPerRepoConfig_SetAuthorizationOwnersFile(t *testing.T) {
+func TestPerRepoConfig_SetOwnersFileAuthEnabled(t *testing.T) {
 	t.Run("enable adds provider", func(t *testing.T) {
 		cfg := &perRepoConfig{}
-		cfg.SetAuthorizationOwnersFile(true)
-		assert.True(t, cfg.AuthorizationOwnersFile())
+		cfg.SetOwnersFileAuthEnabled(true)
+		assert.True(t, cfg.IsOwnersFileAuthEnabled())
 		assert.Len(t, cfg.Authorization, 1)
 	})
 
 	t.Run("enable is idempotent", func(t *testing.T) {
 		cfg := &perRepoConfig{}
-		cfg.SetAuthorizationOwnersFile(true)
-		cfg.SetAuthorizationOwnersFile(true)
+		cfg.SetOwnersFileAuthEnabled(true)
+		cfg.SetOwnersFileAuthEnabled(true)
 		assert.Len(t, cfg.Authorization, 1)
 	})
 
@@ -998,8 +991,8 @@ func TestPerRepoConfig_SetAuthorizationOwnersFile(t *testing.T) {
 		cfg := &perRepoConfig{
 			Authorization: []AuthorizationProvider{{Provider: "owners_file"}},
 		}
-		cfg.SetAuthorizationOwnersFile(false)
-		assert.False(t, cfg.AuthorizationOwnersFile())
+		cfg.SetOwnersFileAuthEnabled(false)
+		assert.False(t, cfg.IsOwnersFileAuthEnabled())
 		assert.Nil(t, cfg.Authorization)
 	})
 
@@ -1010,19 +1003,19 @@ func TestPerRepoConfig_SetAuthorizationOwnersFile(t *testing.T) {
 				{Provider: "other"},
 			},
 		}
-		cfg.SetAuthorizationOwnersFile(false)
-		assert.False(t, cfg.AuthorizationOwnersFile())
+		cfg.SetOwnersFileAuthEnabled(false)
+		assert.False(t, cfg.IsOwnersFileAuthEnabled())
 		assert.Equal(t, []AuthorizationProvider{{Provider: "other"}}, cfg.Authorization)
 	})
 
 	t.Run("disable is no-op when not set", func(t *testing.T) {
 		cfg := &perRepoConfig{}
-		cfg.SetAuthorizationOwnersFile(false)
+		cfg.SetOwnersFileAuthEnabled(false)
 		assert.Nil(t, cfg.Authorization)
 	})
 }
 
 func TestPerRepoDefaults_AuthorizationOwnersFile(t *testing.T) {
 	d := &perRepoDefaults{}
-	assert.False(t, d.AuthorizationOwnersFile())
+	assert.False(t, d.IsOwnersFileAuthEnabled())
 }

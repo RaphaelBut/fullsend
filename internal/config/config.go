@@ -1021,9 +1021,9 @@ func ParsePerRepoConfig(data []byte) (PerRepoConfigReader, error) {
 	return &cfg, nil
 }
 
-// ParsePerRepoConfigWriter parses YAML bytes into a ConfigWriter for
-// callers that need to modify the config after parsing.
-func ParsePerRepoConfigWriter(data []byte) (ConfigWriter, error) {
+// ParsePerRepoConfigWriter parses YAML bytes into a PerRepoConfigWriter
+// for callers that need to modify the config after parsing.
+func ParsePerRepoConfigWriter(data []byte) (PerRepoConfigWriter, error) {
 	var cfg perRepoConfig
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing per-repo config: %w", err)

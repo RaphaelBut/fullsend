@@ -51,7 +51,7 @@ func Dispatch(ctx context.Context, opts Options) ([]ExecutionRef, error) {
 	// collaborator-API role.
 	repoRoot := filepath.Dir(opts.ConfigDir)
 	effectiveRole := opts.Event.Actor.Role
-	if dirCfg.AuthorizationOwnersFile() && opts.Event.Actor.ID != "" {
+	if pr, ok := dirCfg.(config.PerRepoConfigReader); ok && pr.IsOwnersFileAuthEnabled() && opts.Event.Actor.ID != "" {
 		ownersPath := filepath.Join(repoRoot, "OWNERS")
 		aliasesPath := filepath.Join(repoRoot, "OWNERS_ALIASES")
 		role, err := owners.Resolve(ownersPath, aliasesPath, opts.Event.Actor.ID)

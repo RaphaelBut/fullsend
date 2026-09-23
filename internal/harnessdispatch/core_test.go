@@ -122,7 +122,7 @@ func TestDispatch_OwnersUpgradesActorRole(t *testing.T) {
 	dir := t.TempDir()
 
 	configDir := writeHarnessConfigSubdir(t, dir, issueOpenedHarnessYAML(), func(cfg config.PerRepoConfigWriter) {
-		cfg.SetAuthorizationOwnersFile(true)
+		cfg.SetOwnersFileAuthEnabled(true)
 	})
 	ev.Actor.ID = "test-approver"
 	ev.Actor.Role = normevent.RoleNone
@@ -147,7 +147,7 @@ func TestDispatch_OwnersReviewerDeniedWriteLevel(t *testing.T) {
 
 	// issue-opened matches this harness, so write-level auth is the only gate.
 	configDir := writeHarnessConfigSubdir(t, dir, issueOpenedHarnessYAML(), func(cfg config.PerRepoConfigWriter) {
-		cfg.SetAuthorizationOwnersFile(true)
+		cfg.SetOwnersFileAuthEnabled(true)
 	})
 
 	ev := mustEvent(t, "issue-opened.json")

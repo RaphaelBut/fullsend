@@ -72,7 +72,7 @@ func ValidateSlotClean(w *world.World) error {
 	if cfg.IsKillSwitchActive() {
 		stale = append(stale, "kill_switch is active")
 	}
-	if cfg.AuthorizationOwnersFile() {
+	if cfg.IsOwnersFileAuthEnabled() {
 		stale = append(stale, "owners_file authorization is enabled")
 	}
 	if len(stale) > 0 {

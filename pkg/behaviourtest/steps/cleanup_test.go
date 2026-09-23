@@ -1196,7 +1196,7 @@ func TestValidateSlotClean(t *testing.T) {
 
 	t.Run("owners auth left enabled", func(t *testing.T) {
 		t.Parallel()
-		err := ValidateSlotClean(leased(slotConfig(t, func(c config.PerRepoConfigWriter) { c.SetAuthorizationOwnersFile(true) })))
+		err := ValidateSlotClean(leased(slotConfig(t, func(c config.PerRepoConfigWriter) { c.SetOwnersFileAuthEnabled(true) })))
 		require.ErrorContains(t, err, "owners_file authorization is enabled")
 	})
 

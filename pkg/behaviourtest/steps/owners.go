@@ -135,7 +135,7 @@ func givenOwnersAuthEnabled(w *world.World) error {
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
-	cfg.SetAuthorizationOwnersFile(true)
+	cfg.SetOwnersFileAuthEnabled(true)
 	merged, err := cfg.Marshal()
 	if err != nil {
 		return err
@@ -308,7 +308,7 @@ func disableOwnersAuth(w *world.World) error {
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
-	cfg.SetAuthorizationOwnersFile(false)
+	cfg.SetOwnersFileAuthEnabled(false)
 	merged, err := cfg.Marshal()
 	if err != nil {
 		return err
