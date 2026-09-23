@@ -48,9 +48,11 @@ runs:
           s=${s//$'\r'/}
           s=${s//$'\n'/ }
           s=${s//'%0D'/}
+          s=${s//'%0d'/}
           s=${s//'%0A'/ }
+          s=${s//'%0a'/ }
           s=${s//'::'/}
-          printf '%s' "$s" | tr -cd '[:print:]\t'
+          LC_ALL=C printf '%s' "$s" | LC_ALL=C tr -cd '\11\40-\176'
         }
         if [[ -z "$MINT_URL" ]]; then
           echo "::error::FULLSEND_MINT_URL is not set"
