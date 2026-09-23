@@ -183,10 +183,15 @@ managed_content_b64() {
 # form `@<40-hex-sha> # <ref>` to `@<ref>`. Renovate and pinact manage pins
 # this way; treating them as equivalent to the named ref prevents
 # reconciliation from stripping a SHA pin back to a mutable branch (a
-# security regression on workflows granting id-token: write).
+# security regression on workflows granting id-token: write). Tolerates an
+# optional closing quote between the SHA and the `#` annotation (e.g.
+# `uses: "owner/repo@<sha>" # main`) so a quoted uses: value normalizes the
+# same way as an unquoted one; no quoted uses: line exists in this repo
+# today, but this keeps the comparison correct if the template ever quotes
+# one.
 # Reads stdin, writes stdout.
 normalize_sha_pins() {
-  sed -E 's/^([[:space:]]*uses:[[:space:]]+[^[:space:]@]+)@([0-9a-fA-F]{40})[[:space:]]+#[[:space:]]+([A-Za-z0-9._-]+)/\1@\3/'
+  sed -E 's/^([[:space:]]*uses:[[:space:]]+[^[:space:]@]+)@([0-9a-fA-F]{40})(["'"'"']?)[[:space:]]+#[[:space:]]+([A-Za-z0-9._-]+)/\1@\4\3/'
 }
 
 # comparable_managed_b64 returns the fullsend-managed portion of a shim with

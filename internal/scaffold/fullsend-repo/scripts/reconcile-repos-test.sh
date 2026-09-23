@@ -1382,3 +1382,33 @@ if ! grep -q "shim is stale" "${TMPDIR}/stdout6d.log"; then
 fi
 
 echo "PASS: SHA pin plus extra content drift is still drift"
+
+# Locked-in write-path contract: when other managed content has drifted
+# alongside a SHA pin, the update PR re-emits the raw template (`@main`),
+# not the SHA-pinned form — Renovate/pinact can re-pin it. This is the
+# documented, accepted behavior (see PR description); assert it explicitly
+# so a future refactor cannot silently change it in either direction
+# without a test failure.
+if [ ! -f "${TMPDIR}/blob-input-test-repo.json" ]; then
+  echo "FAIL: no update blob captured for SHA pin plus extra content drift"
+  exit 1
+fi
+
+BLOB6D_B64=$(jq -r '.content' "${TMPDIR}/blob-input-test-repo.json")
+BLOB6D_DECODED=$(printf '%s' "$BLOB6D_B64" | /usr/bin/base64 -d)
+
+if ! printf '%s\n' "$BLOB6D_DECODED" | grep -q "dispatch.yml@main"; then
+  echo "FAIL: mixed-drift update did not re-emit the raw template (@main); SHA pin was not stripped as expected"
+  echo "Got:"
+  printf '%s\n' "$BLOB6D_DECODED"
+  exit 1
+fi
+
+if printf '%s\n' "$BLOB6D_DECODED" | grep -q "dispatch.yml@${SHA40}"; then
+  echo "FAIL: mixed-drift update unexpectedly preserved the SHA pin"
+  echo "Got:"
+  printf '%s\n' "$BLOB6D_DECODED"
+  exit 1
+fi
+
+echo "PASS: mixed-drift update re-emits the raw template, stripping the SHA pin (locked-in behavior)"
