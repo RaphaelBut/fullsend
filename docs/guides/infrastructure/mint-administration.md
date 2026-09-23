@@ -598,6 +598,18 @@ PEMs use role-only naming (`fullsend-{role}-app-pem`) — one secret per role, s
 - Role PEM secrets were never bootstrapped — run `mint deploy --pem-dir` or `mint add-role` first
 - The enrolled roles in `ROLE_APP_IDS` reference apps whose PEM secrets do not exist in Secret Manager
 
+### Token mint returns HTTP 422
+
+**Symptom:** A workflow's `mint-token` step (or `fullsend mint token`) fails with HTTP 422. The log includes a message that the GitHub application is not installed for the repository, and may name the uncovered repo.
+
+**What it means:** The GitHub App for the requested role is not installed on the target repository, or the App is installed in selected-repository mode and the repo is not in the selection. 422 is a client error — retrying cannot succeed.
+
+**Resolution:**
+
+1. Confirm the App (`fullsend-ai-<role>` on the hosted mint) is installed on the repository — see [Configuring GitHub](../getting-started/configuring-github.md)
+2. If the App is installed for selected repositories only, add the repository to the selection
+3. The mint response body names the uncovered repository when the installation lookup returned 404
+
 ### Debugging with gcloud
 
 When the CLI output is insufficient, inspect the Cloud Run service

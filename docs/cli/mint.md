@@ -333,6 +333,8 @@ fullsend mint token \
 | `--audience` | `fullsend-mint` | OIDC audience |
 | `--level` | `write` | Privilege level name (e.g. `read`, `write`). Both the CLI and server default to `write` when omitted (temporary compatibility default). The value is passed through to the mint — if the role does not define the requested level, the mint returns an error |
 
+HTTP 422 from the mint means the GitHub App for the requested role is not installed on the target repository, or is installed in selected-repository mode and the repo is not in the selection. See [Token mint returns HTTP 422](../guides/infrastructure/mint-administration.md#token-mint-returns-http-422).
+
 ## See also
 
 - [Mint service administration](../guides/infrastructure/mint-administration.md) — deployment and management guide
