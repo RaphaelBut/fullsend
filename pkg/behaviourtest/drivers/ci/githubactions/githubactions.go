@@ -918,9 +918,21 @@ func (d *Driver) harnessPollOnce(ctx context.Context, remaining time.Duration, o
 				// if: always(), so a dual-dispatch sibling that
 				// concludes failure can produce this artifact while a
 				// later run for the same agent is still going or has
-				// already succeeded. Apply the same supersede check as
-				// the recentRuns job-scan branch below (#7574) before
-				// treating this artifact's run as authoritative.
+				// already succeeded. selectRepositoryArtifactAfter only
+				// returns the single highest-ID matching artifact, and
+				// artifact IDs are assigned at upload time — if the
+				// failed run finishes uploading after the successful
+				// run, its artifact keeps winning that selection on
+				// every poll, hiding the success artifact from this
+				// branch entirely. Scan the other matching artifacts for
+				// one whose run already completed successfully before
+				// falling back to the supersede check on this one.
+				if success := d.harnessArtifactRunSuccess(ctx, owner, repo, arts, artifactName, after, art.ID, lookupErrs); success != nil {
+					return success, true, nil
+				}
+				// Apply the same supersede check as the recentRuns
+				// job-scan branch below (#7574) before treating this
+				// artifact's run as authoritative.
 				recentRuns, runsErr := d.listHarnessRunsAfter(ctx, owner, repo, after)
 				runsErrs.record(ctx, runsErr)
 				if runsErr != nil {
@@ -964,6 +976,34 @@ func (d *Driver) harnessPollOnce(ctx context.Context, remaining time.Duration, o
 	return nil, false, nil
 }
 
+// harnessArtifactRunSuccess scans arts for a matching artifact — other than
+// skipID, the one already selected as the highest-ID match — that was
+// created at or after after and belongs to a completed, successful
+// workflow run. selectRepositoryArtifactAfter only ever returns the single
+// highest-ID artifact for a given name, but the harness workflow uploads
+// fullsend-{agent} with if: always(), so a dual-dispatch sibling that
+// concludes failure can win that selection over an already-succeeded run's
+// own artifact whenever the failure finishes uploading later (#7574). This
+// scan finds that hidden success without waiting for its artifact to
+// eventually outrank the failure's by ID, which it may never do.
+func (d *Driver) harnessArtifactRunSuccess(ctx context.Context, owner, repo string, arts []forge.RepositoryArtifact, name string, after time.Time, skipID int, lookupErrs *pollErrors) *forge.WorkflowRun {
+	for _, art := range arts {
+		if art.Name != name || art.ID == skipID {
+			continue
+		}
+		artTime, parseErr := time.Parse(time.RFC3339, art.CreatedAt)
+		if parseErr != nil || artTime.Before(after) {
+			continue
+		}
+		run, err := d.Client.GetWorkflowRun(ctx, owner, repo, art.WorkflowRunID)
+		lookupErrs.record(ctx, err)
+		if err == nil && run.Status == "completed" && run.Conclusion == "success" {
+			return run
+		}
+	}
+	return nil
+}
+
 // workflowRunNewer reports whether a was created after b. CreatedAt is
 // compared when both parse as RFC3339; otherwise run ID is the tiebreak
 // (GitHub run IDs are monotonic).
@@ -977,15 +1017,17 @@ func workflowRunNewer(a, b forge.WorkflowRun) bool {
 }
 
 // hasSupersedingAgentRun reports whether recentRuns contains a run newer
-// than failed that either has scheduled agent's harness job and is still
-// pending or has already succeeded, or cannot yet be ruled out as such.
-// Dual-dispatch can leave an earlier sibling concluding failure while a
-// later run of the same agent is still going, still expanding its job
-// matrix, or has already succeeded; fail-fast must not treat the earlier
-// failure as authoritative in any of these cases (#7574). A candidate is
-// only confirmed not to supersede once its own matrix has resolved
-// (harnessMatrixExpanded) without scheduling the agent, or it has
-// completed without doing so.
+// than failed that either has scheduled agent's harness job and that job
+// is still pending or concluded success, or cannot yet be ruled out as
+// such. Dual-dispatch can leave an earlier sibling concluding failure
+// while a later run of the same agent is still going, still expanding its
+// job matrix, or has already succeeded; fail-fast must not treat the
+// earlier failure as authoritative in any of these cases (#7574). A
+// candidate is only confirmed not to supersede once either its own
+// matching job has itself completed without succeeding (cancelled,
+// skipped, or failure — the overall run's conclusion does not decide
+// this, only the agent's own job does), or its matrix has resolved
+// (harnessMatrixExpanded) without scheduling the agent at all.
 //
 // A job-listing error on a candidate, or a candidate whose matrix has not
 // resolved yet, leaves that candidate's outcome unknown; both are treated
@@ -1004,8 +1046,16 @@ func (d *Driver) hasSupersedingAgentRun(ctx context.Context, owner, repo, agent 
 		if err != nil {
 			return true
 		}
-		if hasJob, _ := matchAgentJob(jobs, agent); hasJob {
-			return true
+		if hasJob, job := matchAgentJob(jobs, agent); hasJob {
+			// The overall run can conclude "success" while this agent's
+			// own job was skipped or cancelled (other matrix jobs
+			// succeeded) — that must not suppress fail-fast on a genuine
+			// earlier failure. Only a still-pending or successfully
+			// concluded agent job supersedes.
+			if job.Status != "completed" || job.Conclusion == "success" {
+				return true
+			}
+			continue
 		}
 		if other.Status != "completed" && !harnessMatrixExpanded(jobs) {
 			return true
