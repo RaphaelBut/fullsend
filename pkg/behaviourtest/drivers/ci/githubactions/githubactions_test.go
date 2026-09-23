@@ -1000,6 +1000,73 @@ func TestWaitForHarnessAgent_FailedRunSupersededByLaterSuccess(t *testing.T) {
 	assert.Equal(t, 200, run.ID)
 }
 
+// TestWaitForHarnessAgent_ArtifactFirstBranchSupersededByLaterSuccess
+// covers the #7574 gap in the artifact-first branch: the harness workflow
+// uploads fullsend-{agent} with if: always(), so run 100's own artifact
+// is already present when it concludes "failure" (having scheduled the
+// agent's harness job) — the quick-success artifact scan finds it before
+// the recentRuns job-scan branch ever runs. A later run 200 for the same
+// agent is still in progress and then succeeds, uploading its own
+// (higher-ID) artifact. WaitForHarnessAgent must not treat run 100's
+// artifact as authoritative — it must keep polling until run 200's
+// artifact supersedes it.
+func TestWaitForHarnessAgent_ArtifactFirstBranchSupersededByLaterSuccess(t *testing.T) {
+	t.Parallel()
+
+	after := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fake := forge.NewFakeClient()
+	fake.WorkflowRunsList = map[string][]forge.WorkflowRun{
+		"org/repo/fullsend.yaml": {
+			{
+				ID: 100, Status: "completed", Conclusion: "failure",
+				CreatedAt: "2026-01-02T00:00:00Z",
+				HTMLURL:   "https://github.com/org/repo/actions/runs/100",
+			},
+			{
+				ID: 200, Status: "in_progress",
+				CreatedAt: "2026-01-02T00:01:00Z",
+			},
+		},
+	}
+	fake.WorkflowRuns = map[string]*forge.WorkflowRun{
+		"org/repo/failed": {
+			ID: 100, Status: "completed", Conclusion: "failure",
+			CreatedAt: "2026-01-02T00:00:00Z",
+			HTMLURL:   "https://github.com/org/repo/actions/runs/100",
+		},
+		"org/repo/success": {
+			ID: 200, Status: "completed", Conclusion: "success",
+			CreatedAt: "2026-01-02T00:01:00Z",
+		},
+	}
+	fake.WorkflowRunJobs = map[int][]forge.WorkflowJob{
+		100: {{ID: 1, Name: "dispatch / Harness run (reaction-ping)", Status: "completed", Conclusion: "failure"}},
+		200: {{ID: 2, Name: "dispatch / Harness run (reaction-ping)", Status: "in_progress"}},
+	}
+
+	client := &settlingArtifactsClient{
+		FakeClient: fake,
+		callsLeft:  1,
+		// First poll: only run 100's own artifact is present, so the
+		// quick-success artifact scan finds it first and must not
+		// fail-fast without applying the supersede check.
+		beforeArts: []forge.RepositoryArtifact{
+			{ID: 10, Name: "fullsend-reaction-ping", CreatedAt: "2026-01-02T00:00:30Z", WorkflowRunID: 100},
+		},
+		// Second poll: run 200's own (higher-ID) artifact has landed too.
+		afterArts: []forge.RepositoryArtifact{
+			{ID: 10, Name: "fullsend-reaction-ping", CreatedAt: "2026-01-02T00:00:30Z", WorkflowRunID: 100},
+			{ID: 20, Name: "fullsend-reaction-ping", CreatedAt: "2026-01-02T00:02:00Z", WorkflowRunID: 200},
+		},
+	}
+
+	d := &Driver{Client: client, afterFunc: instantAfter}
+	run, err := d.WaitForHarnessAgent(context.Background(), "org", "repo", "reaction-ping", after)
+	require.NoError(t, err)
+	require.NotNil(t, run)
+	assert.Equal(t, 200, run.ID)
+}
+
 // TestWaitForHarnessAgent_QueuedSiblingWithUnexpandedMatrixDoesNotFailFast
 // covers the #7574 remediation for the queued/unexpanded-matrix window:
 // run 100 concludes "failure" having scheduled the agent's harness job,

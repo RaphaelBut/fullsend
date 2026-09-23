@@ -914,6 +914,18 @@ func (d *Driver) harnessPollOnce(ctx context.Context, remaining time.Duration, o
 				if isConcurrencySuperseded(candidate.Conclusion) {
 					return nil, false, nil
 				}
+				// The harness workflow uploads fullsend-{agent} with
+				// if: always(), so a dual-dispatch sibling that
+				// concludes failure can produce this artifact while a
+				// later run for the same agent is still going or has
+				// already succeeded. Apply the same supersede check as
+				// the recentRuns job-scan branch below (#7574) before
+				// treating this artifact's run as authoritative.
+				recentRuns, runsErr := d.listHarnessRunsAfter(ctx, owner, repo, after)
+				runsErrs.record(ctx, runsErr)
+				if d.hasSupersedingAgentRun(ctx, owner, repo, agent, *candidate, recentRuns, lookupErrs) {
+					return nil, false, nil
+				}
 				return nil, true, fmt.Errorf("harness run for %q concluded with %q (run %d: %s)",
 					agent, candidate.Conclusion, candidate.ID, candidate.HTMLURL)
 			}
