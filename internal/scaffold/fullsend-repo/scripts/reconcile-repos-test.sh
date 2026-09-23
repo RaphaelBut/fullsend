@@ -1469,6 +1469,8 @@ repos:
     enabled: false
   sha-broken:
     enabled: false
+  probe-broken:
+    enabled: false
 CFGEOF
 
 cat > "${MOCK_BIN}/yq" <<'YQEOF'
@@ -1477,7 +1479,7 @@ query="${1:-}"
 if [[ "$query" == *"enabled == true"* ]]; then
   printf '%s\n' "broken-repo" "absent-repo"
 elif [[ "$query" == *"enabled == false"* ]]; then
-  printf '%s\n' "gone-on-branch" "sha-broken"
+  printf '%s\n' "gone-on-branch" "sha-broken" "probe-broken"
 else
   echo "unexpected yq query: $*" >&2
   exit 1
@@ -1532,6 +1534,8 @@ case "\$endpoint" in
   repos/test-org/gone-on-branch/contents/*\?ref=*)
     json="\$not_found"; rc=1 ;;
   repos/test-org/sha-broken/contents/*\?ref=*)
+    json='{"message":"Server Error","status":"500"}'; rc=1 ;;
+  repos/test-org/probe-broken/contents/*)
     json='{"message":"Server Error","status":"500"}'; rc=1 ;;
   repos/test-org/*/contents/*)
     json='{"content":"c3RhbGUgc2hpbSB0ZW1wbGF0ZQo=","sha":"default-file-sha"}' ;;
@@ -1616,7 +1620,17 @@ if grep -q "sha-broken/contents/.*DELETE" "${GH_LOG}" ||
 fi
 echo "PASS: unenroll with an unreadable removal branch counts as failed with no DELETE"
 
-if [ "$test7_rc" -eq 0 ] || ! grep -q "^Failed: 2$" "${TMPDIR}/stdout7.log"; then
-  t7_fail "expected exit 1 with exactly 2 failed repos (rc=${test7_rc})"
+# A failed default-branch lookup must not read as "already unenrolled".
+if ! grep -qF "::warning::Failed to read .github/workflows/fullsend.yaml for probe-broken" "${TMPDIR}/stdout7.log"; then
+  t7_fail "500 on the default-branch shim lookup did not warn with the repo and path"
+fi
+if grep -q "probe-broken already unenrolled" "${TMPDIR}/stdout7.log" ||
+   grep -qE "repos/test-org/probe-broken/(git/refs|contents/.*DELETE)" "${GH_LOG}"; then
+  t7_fail "500 on the default-branch shim lookup was treated as unenrolled or still wrote"
+fi
+echo "PASS: unenroll with an unreadable default branch counts as failed with no write"
+
+if [ "$test7_rc" -eq 0 ] || ! grep -q "^Failed: 3$" "${TMPDIR}/stdout7.log"; then
+  t7_fail "expected exit 1 with exactly 3 failed repos (rc=${test7_rc})"
 fi
 echo "PASS: contents API failures are counted and reconciliation continues"

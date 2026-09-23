@@ -672,7 +672,11 @@ if [ -n "$DISABLED_REPOS" ]; then
     fi
 
     # Check if shim exists on default branch.
-    if ! gh api "repos/$ORG/$REPO/contents/$SHIM_PATH" --silent 2>/dev/null; then
+    if ! DEFAULT_FILE_SHA=$(fetch_contents_field "$REPO" "$SHIM_PATH" .sha); then
+      FAILED=$((FAILED + 1))
+      continue
+    fi
+    if [ -z "$DEFAULT_FILE_SHA" ]; then
       echo "✓ $REPO already unenrolled (no shim on default branch)"
       SKIPPED=$((SKIPPED + 1))
       continue
