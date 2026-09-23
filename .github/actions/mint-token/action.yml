@@ -39,21 +39,6 @@ runs:
         LEVEL: ${{ inputs.level }}
       run: |
         set -euo pipefail
-        # Strip characters that could let an untrusted value (e.g. the
-        # mint's JSON error body) inject additional workflow commands into
-        # a ::error:: annotation: CR/LF, their percent-encoded forms, and
-        # literal "::" sequences. Also drops other control characters.
-        sanitize_annotation() {
-          local s=$1
-          s=${s//$'\r'/}
-          s=${s//$'\n'/ }
-          s=${s//'%0D'/}
-          s=${s//'%0d'/}
-          s=${s//'%0A'/ }
-          s=${s//'%0a'/ }
-          s=${s//'::'/}
-          LC_ALL=C printf '%s' "$s" | LC_ALL=C tr -cd '\11\40-\176'
-        }
         if [[ -z "$MINT_URL" ]]; then
           echo "::error::FULLSEND_MINT_URL is not set"
           exit 1
@@ -89,14 +74,7 @@ runs:
           -d "$BODY" \
           "${MINT_URL}/v1/token") || {
           if [[ "$HTTP_CODE" == "422" ]]; then
-            MINT_ERROR=$(jq -r '.error // empty' "$BODY_FILE" 2>/dev/null || true)
-            MINT_ERROR=$(sanitize_annotation "$MINT_ERROR")
-            if [[ -n "$MINT_ERROR" ]]; then
-              printf '%s\n' "::error::Mint rejected the request (422): $MINT_ERROR"
-            else
-              SAFE_ROLE=$(sanitize_annotation "$ROLE")
-              printf '%s\n' "::error::A 422 error code usually means the GitHub App configured for role \"$SAFE_ROLE\" is not installed for the repository. Check if it is installed in certain selected repositories."
-            fi
+            printf '%s\n' "::error::A 422 error code usually means the GitHub App configured for role \"$ROLE\" is not installed for the repository. Check if it is installed in certain selected repositories."
           fi
           exit 1
         }
