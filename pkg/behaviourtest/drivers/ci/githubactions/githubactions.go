@@ -923,6 +923,14 @@ func (d *Driver) harnessPollOnce(ctx context.Context, remaining time.Duration, o
 				// treating this artifact's run as authoritative.
 				recentRuns, runsErr := d.listHarnessRunsAfter(ctx, owner, repo, after)
 				runsErrs.record(ctx, runsErr)
+				if runsErr != nil {
+					// Listing failures never end the wait (doc comment
+					// above): an empty recentRuns from the error would
+					// make hasSupersedingAgentRun report false and fall
+					// through to the fail-fast return below on
+					// incomplete information. Keep polling instead.
+					return nil, false, nil
+				}
 				if d.hasSupersedingAgentRun(ctx, owner, repo, agent, *candidate, recentRuns, lookupErrs) {
 					return nil, false, nil
 				}
