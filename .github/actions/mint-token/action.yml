@@ -70,8 +70,13 @@ runs:
           -H "Content-Type: application/json" \
           -d "$BODY" \
           "${MINT_URL}/v1/token") || {
-          if [ "$HTTP_CODE" = "422" ]; then
-            echo "::error::A 422 error code usually means that the GitHub application (fullsend-ai-${ROLE}) is not installed for the repository. Check if it is installed in certain selected repositories."
+          if [[ "$HTTP_CODE" == "422" ]]; then
+            MINT_ERROR=$(jq -r '.error // empty' "$BODY_FILE" 2>/dev/null || true)
+            if [[ -n "$MINT_ERROR" ]]; then
+              echo "::error::Mint rejected the request (422): $MINT_ERROR"
+            else
+              echo "::error::A 422 error code usually means that the GitHub application (fullsend-ai-${ROLE}) is not installed for the repository. Check if it is installed in certain selected repositories."
+            fi
           fi
           rm -f "$BODY_FILE"
           exit 1
