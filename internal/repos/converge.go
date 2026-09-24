@@ -1185,6 +1185,9 @@ func convergeSchedules(ctx context.Context,
 
 	var actions []ComponentAction
 
+	owner, repo := resolved.Owner, resolved.Repo
+	repoFullName := owner + "/" + repo
+
 	var missingSchedules []string
 	var inactiveSchedules []string
 	for _, c := range components {
@@ -1213,6 +1216,8 @@ func convergeSchedules(ctx context.Context,
 				Action:    "none",
 				Detail:    fmt.Sprintf("%s is disabled; not reactivating (pass --reactivate-schedules to repair)", DriftFieldName(name)),
 			})
+			progress(repoFullName, "warning",
+				fmt.Sprintf("Schedule %s is disabled (not reactivating; pass --reactivate-schedules to repair)", DriftFieldName(name)))
 		}
 		inactiveSchedules = nil
 	}
@@ -1221,9 +1226,7 @@ func convergeSchedules(ctx context.Context,
 		return actions
 	}
 
-	owner, repo := resolved.Owner, resolved.Repo
 	client := resolved.ForgeConfig.Client
-	repoFullName := owner + "/" + repo
 
 	if dryRun {
 		for _, name := range inactiveSchedules {

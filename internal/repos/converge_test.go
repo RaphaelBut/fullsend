@@ -2415,7 +2415,23 @@ func TestConverge_GitLab_DisabledSchedulesNotReactivatedByDefault(t *testing.T) 
 	}
 
 	sc := &fakeScaffoldCommit{}
-	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), noopProgress)
+
+	// Use a recording progress callback instead of noopProgress so we can
+	// verify the disabled-schedule skip path surfaces a warning to the
+	// operator, matching the orphan file/variable pattern, instead of
+	// converging silently.
+	var mu sync.Mutex
+	type progressCall struct {
+		repo, phase, message string
+	}
+	var calls []progressCall
+	recordProgress := func(repo, phase, message string) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, progressCall{repo, phase, message})
+	}
+
+	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), recordProgress)
 	if err != nil {
 		t.Fatalf("Converge() error: %v", err)
 	}
@@ -2437,6 +2453,22 @@ func TestConverge_GitLab_DisabledSchedulesNotReactivatedByDefault(t *testing.T) 
 	}
 	if !reported {
 		t.Error("expected a schedule:slash-poll action reporting the disabled drift")
+	}
+
+	// The repo install summary must not stay silent about the disabled
+	// schedule: convergeSchedules must call progress() with a warning,
+	// the same way orphan file/variable drift does.
+	var hasDisabledScheduleWarning bool
+	for _, c := range calls {
+		if c.phase == "warning" && strings.Contains(c.message, "disabled") {
+			hasDisabledScheduleWarning = true
+		}
+	}
+	if !hasDisabledScheduleWarning {
+		t.Error("expected progress warning for disabled schedule")
+		for _, c := range calls {
+			t.Logf("  progress: repo=%s phase=%s msg=%s", c.repo, c.phase, c.message)
+		}
 	}
 	if len(fc.UpdatedScheduleIDs) != 0 {
 		t.Errorf("default converge must not call UpdatePipelineSchedule, got %v", fc.UpdatedScheduleIDs)
