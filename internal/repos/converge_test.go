@@ -1929,6 +1929,50 @@ func TestConverge_GitLab_RepairsMissingTrustScript(t *testing.T) {
 	t.Fatalf("convergence did not repair %s; files: %+v", gitlabTrustScriptPath, sc.files)
 }
 
+func TestConverge_GitLab_RefUpgradeAndMissingHelperDedupes(t *testing.T) {
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	fc.FileContents["acme/api/.gitlab/ci/fullsend-dispatch.yml"] = []byte("  ref: v1.0.0\n")
+	delete(fc.FileContents, "acme/api/"+gitlabTrustScriptPath)
+
+	sc := &spyScaffoldCommit{}
+	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 0 {
+		t.Fatalf("unexpected failure: %v", result.Failed()[0].Error)
+	}
+	var hasRefUpgrade bool
+	for _, a := range result.Results[0].Actions {
+		if a.Component == "ref" && a.Action == "upgrade" {
+			hasRefUpgrade = true
+		}
+	}
+	if !hasRefUpgrade {
+		t.Fatalf("expected ref upgrade action, got %+v", result.Results[0].Actions)
+	}
+
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	counts := make(map[string]int, len(sc.files))
+	for _, f := range sc.files {
+		counts[f.Path]++
+	}
+	if counts[gitlabTrustScriptPath] == 0 {
+		t.Fatalf("convergence did not repair %s; files: %+v", gitlabTrustScriptPath, sc.files)
+	}
+	for path, n := range counts {
+		if n > 1 {
+			t.Errorf("path %s submitted %d times; want at most once", path, n)
+		}
+	}
+	if counts[".gitlab/ci/fullsend-dispatch.yml"] == 0 {
+		t.Error("expected dispatch file in the ref-upgrade commit")
+	}
+}
+
 func TestConverge_GitLab_RepairsMissingRoleTokenScript(t *testing.T) {
 	fc := newFakeClientForBatch("acme/api")
 	populateGitLabInstalled(fc, "acme", "api")
