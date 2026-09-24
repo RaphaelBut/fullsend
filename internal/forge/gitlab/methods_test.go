@@ -1713,6 +1713,35 @@ func TestDeletePipelineSchedule(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestUpdatePipelineSchedule(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipeline_schedules/123", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method)
+		var body map[string]any
+		readJSONBody(t, r, &body)
+		assert.Equal(t, true, body["active"])
+		writeJSON(t, w, http.StatusOK, map[string]any{"id": 123, "active": true})
+	})
+
+	err := client.UpdatePipelineSchedule(ctx, "myorg", "myrepo", 123, true)
+	require.NoError(t, err)
+}
+
+func TestUpdatePipelineSchedule_Error(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipeline_schedules/123", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method)
+		writeJSON(t, w, http.StatusInternalServerError, map[string]string{"message": "boom"})
+	})
+
+	err := client.UpdatePipelineSchedule(ctx, "myorg", "myrepo", 123, true)
+	require.Error(t, err)
+}
+
 func TestListPipelineSchedules(t *testing.T) {
 	client, mux := setupTest(t)
 	ctx := context.Background()

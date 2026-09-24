@@ -841,6 +841,18 @@ func (c *LiveClient) DeletePipelineSchedule(ctx context.Context, owner, repo str
 	return c.delete_(ctx, path)
 }
 
+// UpdatePipelineSchedule sets whether a pipeline schedule is active.
+func (c *LiveClient) UpdatePipelineSchedule(ctx context.Context, owner, repo string, scheduleID int64, active bool) error {
+	path := fmt.Sprintf("/projects/%s/pipeline_schedules/%d", projectPath(owner, repo), scheduleID)
+	body := map[string]any{"active": active}
+	resp, err := c.put(ctx, path, body)
+	if err != nil {
+		return fmt.Errorf("update pipeline schedule: %w", err)
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // ListPipelineSchedules returns all pipeline schedules for the project.
 func (c *LiveClient) ListPipelineSchedules(ctx context.Context, owner, repo string) ([]forge.PipelineSchedule, error) {
 	proj := projectPath(owner, repo)

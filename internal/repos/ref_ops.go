@@ -68,10 +68,18 @@ func formatRefAnnotation(ref, tag, forgeName string) string {
 }
 
 // collectGitLabUpgradeTemplates collects the GitLab CI template files
-// (agent, poll, pipeline wrapper) for inclusion in an upgrade commit.
-// The dispatch file is excluded because the upgrade path handles it
-// separately via replaceShimRef. The targetRef is used as the fullsend
-// version embedded in the before_script install block.
+// (pipeline wrapper, dispatch version-marker, agent, poll) for inclusion
+// in an upgrade commit. The dispatch file is included wholesale because
+// replaceShimRef only rewrites the version-marker line and would leave a
+// stale pre-#7322 body in place when the ref changes. Unchanged-ref
+// structural drift of that file is repaired by convergeContentDriftFiles.
+// The targetRef is used as the fullsend version embedded in the
+// before_script install block and as the dispatch file's version marker.
+// The root .gitlab-ci.yml is user-owned and is not synced here;
+// structural changes to it (like #7322's rule removal or #7337's stage
+// removal) need an explicit converge-time migration — see
+// convergeGitLabRootCIFiles / StripObsoleteGitLabWorkflowRules
+// / StripObsoleteGitLabStages.
 func collectGitLabUpgradeTemplates(runnerTags []string, targetRef string) ([]forge.TreeFile, error) {
 	installFiles, err := scaffold.CollectGitLabPerRepoInstallFiles(runnerTags, targetRef, "")
 	if err != nil {
@@ -79,18 +87,6 @@ func collectGitLabUpgradeTemplates(runnerTags []string, targetRef string) ([]for
 	}
 	var files []forge.TreeFile
 	for _, f := range installFiles {
-		// Skip the dispatch file — upgrade handles it via replaceShimRef.
-		// The pipeline wrapper is included so structural changes (e.g.
-		// removing the native MR-dispatch include in #7322, dropping the
-		// empty dispatch stage in #7337) reach enrolled repos. The root
-		// .gitlab-ci.yml is user-owned and is not synced here; structural
-		// changes to it (like #7322's rule removal or #7337's stage
-		// removal) need an explicit converge-time migration — see
-		// convergeGitLabRootCIFiles / StripObsoleteGitLabWorkflowRules
-		// / StripObsoleteGitLabStages.
-		if f.Path == ".gitlab/ci/fullsend-dispatch.yml" {
-			continue
-		}
 		files = append(files, forge.TreeFile{
 			Path:    f.Path,
 			Content: f.Content,

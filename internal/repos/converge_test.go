@@ -1906,6 +1906,27 @@ func populateGitLabInstalled(fc *forge.FakeClient, owner, repo string) {
 	}
 }
 
+// populateGitLabScaffoldContent writes the current GitLab install-file
+// set into the fake so content-drift checks treat the repo as current.
+func populateGitLabScaffoldContent(t testing.TB, fc *forge.FakeClient, owner, repo, ref string) {
+	t.Helper()
+	files, err := BuildScaffoldFiles(InstallConfig{
+		Owner:       owner,
+		Repo:        repo,
+		Forge:       ForgeGitLab,
+		Roles:       []string{"triage"},
+		UpstreamRef: ref,
+		UpstreamTag: ref,
+	})
+	if err != nil {
+		t.Fatalf("populateGitLabScaffoldContent: BuildScaffoldFiles: %v", err)
+	}
+	fullName := owner + "/" + repo
+	for _, f := range files {
+		fc.FileContents[fullName+"/"+f.Path] = f.Content
+	}
+}
+
 func TestConverge_GitLab_RepairsMissingTrustScript(t *testing.T) {
 	fc := newFakeClientForBatch("acme/api")
 	populateGitLabInstalled(fc, "acme", "api")
@@ -2250,6 +2271,262 @@ func TestConverge_GitLab_SchedulesAlreadyPresent(t *testing.T) {
 	// No new schedules should have been created.
 	if len(fc.CreatedSchedules) != 0 {
 		t.Errorf("expected 0 created schedules, got %d", len(fc.CreatedSchedules))
+	}
+}
+
+func TestConverge_GitLab_ReactivatesInactiveSchedules(t *testing.T) {
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	populateGitLabScaffoldContent(t, fc, "acme", "api", "v2.5.0")
+	fc.PipelineSchedules["acme/api"] = []forge.PipelineSchedule{
+		{ID: 1, Description: "fullsend slash poll", Active: false},
+		{ID: 2, Description: "fullsend event poll", Active: true},
+	}
+
+	sc := &fakeScaffoldCommit{}
+	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 0 {
+		t.Fatalf("expected 0 failed, got %d: %+v", len(result.Failed()), result.Results[0].Error)
+	}
+	if len(result.Converged()) != 1 {
+		t.Fatalf("expected 1 converged repo, got %d", len(result.Converged()))
+	}
+
+	var activated bool
+	for _, a := range result.Results[0].Actions {
+		if a.Component == "schedule:slash-poll" && a.Action == "update" {
+			activated = true
+			if !strings.Contains(a.Detail, "activated") {
+				t.Errorf("detail = %q, want activated wording", a.Detail)
+			}
+		}
+		if a.Component == "schedule:event-poll" && a.Action != "none" {
+			t.Errorf("active event poll should be left alone, got %s %s", a.Action, a.Detail)
+		}
+	}
+	if !activated {
+		t.Error("expected schedule:slash-poll to be reactivated")
+		for _, a := range result.Results[0].Actions {
+			t.Logf("  action: %s %s: %s", a.Component, a.Action, a.Detail)
+		}
+	}
+	if len(fc.CreatedSchedules) != 0 {
+		t.Errorf("expected 0 created schedules, got %d", len(fc.CreatedSchedules))
+	}
+	if !slices.Contains(fc.UpdatedScheduleIDs, 1) {
+		t.Errorf("expected schedule ID 1 to be updated, got %v", fc.UpdatedScheduleIDs)
+	}
+	for _, s := range fc.PipelineSchedules["acme/api"] {
+		if s.Description == "fullsend slash poll" && !s.Active {
+			t.Error("slash poll schedule should be active after converge")
+		}
+	}
+}
+
+func TestConverge_GitLab_ReactivatesInactiveSchedules_DryRun(t *testing.T) {
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	populateGitLabScaffoldContent(t, fc, "acme", "api", "v2.5.0")
+	fc.PipelineSchedules["acme/api"] = []forge.PipelineSchedule{
+		{ID: 1, Description: "fullsend slash poll", Active: false},
+		{ID: 2, Description: "fullsend event poll", Active: false},
+	}
+
+	cfg := gitlabConvergeCfg("acme/api")
+	cfg.DryRun = true
+	sc := &fakeScaffoldCommit{}
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+
+	activated := 0
+	for _, a := range result.Results[0].Actions {
+		if strings.HasPrefix(a.Component, "schedule:") && a.Action == "update" {
+			activated++
+			if !strings.Contains(a.Detail, "would activate") {
+				t.Errorf("detail = %q, want dry-run wording", a.Detail)
+			}
+		}
+	}
+	if activated != 2 {
+		t.Errorf("expected 2 would-activate actions, got %d", activated)
+	}
+	if len(fc.UpdatedScheduleIDs) != 0 {
+		t.Errorf("dry-run must not update schedules, got %v", fc.UpdatedScheduleIDs)
+	}
+	for _, s := range fc.PipelineSchedules["acme/api"] {
+		if s.Active {
+			t.Errorf("dry-run must leave %s inactive", s.Description)
+		}
+	}
+}
+
+func TestConverge_GitLab_ActivateScheduleError(t *testing.T) {
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	populateGitLabScaffoldContent(t, fc, "acme", "api", "v2.5.0")
+	fc.PipelineSchedules["acme/api"] = []forge.PipelineSchedule{
+		{ID: 1, Description: "fullsend slash poll", Active: false},
+		{ID: 2, Description: "fullsend event poll", Active: true},
+	}
+	fc.Errors["UpdatePipelineSchedule"] = fmt.Errorf("schedule API error")
+
+	sc := &fakeScaffoldCommit{}
+	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 1 {
+		t.Fatalf("expected 1 failed repo, got %d", len(result.Failed()))
+	}
+	var found bool
+	for _, a := range result.Results[0].Actions {
+		if a.Component == "schedule:slash-poll" && a.Action == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected error action for failed schedule activation")
+	}
+}
+
+func TestActivatePipelineSchedules_ErrorPaths(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("list error", func(t *testing.T) {
+		fc := forge.NewFakeClient()
+		fc.Errors["ListPipelineSchedules"] = fmt.Errorf("list API error")
+		actions := activatePipelineSchedules(ctx, fc, "acme", "api", "acme/api",
+			[]string{"schedule:slash-poll"}, noopProgress)
+		if len(actions) != 1 || actions[0].Action != "error" {
+			t.Fatalf("got %+v, want one error action", actions)
+		}
+		if !strings.Contains(actions[0].Detail, "failed to list schedules") {
+			t.Errorf("detail = %q, want list-error wording", actions[0].Detail)
+		}
+	})
+
+	t.Run("unrecognized component", func(t *testing.T) {
+		fc := forge.NewFakeClient()
+		actions := activatePipelineSchedules(ctx, fc, "acme", "api", "acme/api",
+			[]string{"schedule:unknown"}, noopProgress)
+		if len(actions) != 1 || actions[0].Action != "error" {
+			t.Fatalf("got %+v, want one error action", actions)
+		}
+		if !strings.Contains(actions[0].Detail, "unrecognized schedule component") {
+			t.Errorf("detail = %q, want unrecognized wording", actions[0].Detail)
+		}
+	})
+
+	t.Run("inactive not found on re-list", func(t *testing.T) {
+		fc := forge.NewFakeClient()
+		// Probe saw an inactive schedule, but the re-list returns only an active one.
+		fc.PipelineSchedules["acme/api"] = []forge.PipelineSchedule{
+			{ID: 1, Description: "fullsend slash poll", Active: true},
+		}
+		actions := activatePipelineSchedules(ctx, fc, "acme", "api", "acme/api",
+			[]string{"schedule:slash-poll"}, noopProgress)
+		if len(actions) != 1 || actions[0].Action != "error" {
+			t.Fatalf("got %+v, want one error action", actions)
+		}
+		if !strings.Contains(actions[0].Detail, "not found on re-list") {
+			t.Errorf("detail = %q, want not-found wording", actions[0].Detail)
+		}
+	})
+}
+
+func TestConvergeSchedules_UnrecognizedMissing(t *testing.T) {
+	ctx := context.Background()
+	fc := newFakeClientForBatch("acme/api")
+	resolved := ResolvedConfig{
+		Owner: "acme",
+		Repo:  "api",
+		ForgeConfig: ForgeConfig{
+			Client: fc,
+		},
+	}
+	actions := convergeSchedules(ctx, resolved, []ComponentStatus{
+		{Name: "schedule:unknown", Present: false, Match: false},
+	}, false, noopProgress)
+	var found bool
+	for _, a := range actions {
+		if a.Action == "error" && strings.Contains(a.Detail, "unrecognized schedule component") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected unrecognized-component error, got %+v", actions)
+	}
+}
+
+func TestConverge_GitLab_RepairsStaleDispatchContent(t *testing.T) {
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	populateGitLabScaffoldContent(t, fc, "acme", "api", "v2.5.0")
+	// Simulate a pre-#7322 dispatch file whose version-marker still
+	// matches the configured ref, so convergeRefFiles is a no-op and
+	// only content-drift repair can rewrite the stale body.
+	fc.FileContents["acme/api/.gitlab/ci/fullsend-dispatch.yml"] = []byte(`---
+# fullsend-ref: v2.5.0
+# fullsend-stage: dispatch (MR events only)
+
+dispatch:
+  stage: dispatch
+  script:
+    - echo "legacy native MR dispatch"
+`)
+
+	sc := &spyScaffoldCommit{}
+	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 0 {
+		t.Fatalf("expected 0 failed, got %d: %+v", len(result.Failed()), result.Results[0].Error)
+	}
+	if len(result.Converged()) != 1 {
+		t.Fatalf("expected 1 converged repo, got %d", len(result.Converged()))
+	}
+
+	var repaired bool
+	for _, a := range result.Results[0].Actions {
+		if a.Component == ".gitlab/ci/fullsend-dispatch.yml" && a.Action == "update" &&
+			strings.Contains(a.Detail, "content differs") {
+			repaired = true
+		}
+	}
+	if !repaired {
+		t.Error("expected content-drift update for stale fullsend-dispatch.yml")
+		for _, a := range result.Results[0].Actions {
+			t.Logf("  action: %s %s: %s", a.Component, a.Action, a.Detail)
+		}
+	}
+
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	var foundDispatch bool
+	for _, f := range sc.files {
+		if f.Path != ".gitlab/ci/fullsend-dispatch.yml" {
+			continue
+		}
+		foundDispatch = true
+		body := string(f.Content)
+		if strings.Contains(body, "legacy native MR dispatch") {
+			t.Error("committed dispatch file still contains the stale native-dispatch body")
+		}
+		if strings.Contains(body, "dispatch:") && !strings.Contains(body, "# fullsend-stage: dispatch") {
+			t.Error("committed dispatch file looks like a job definition, not the version-marker stub")
+		}
+		if !strings.Contains(body, "#7322") {
+			t.Error("committed dispatch file missing current template marker")
+		}
+	}
+	if !foundDispatch {
+		t.Error("expected fullsend-dispatch.yml in committed files")
 	}
 }
 

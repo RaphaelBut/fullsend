@@ -4038,6 +4038,11 @@ func (c *LiveClient) ListPipelineSchedules(_ context.Context, owner, repo string
 	return nil, forge.ErrNotSupported
 }
 
+// UpdatePipelineSchedule is not supported on GitHub.
+func (c *LiveClient) UpdatePipelineSchedule(_ context.Context, _, _ string, _ int64, _ bool) error {
+	return forge.ErrNotSupported
+}
+
 // UpdateCIVariable is not supported on GitHub.
 func (c *LiveClient) UpdateCIVariable(_ context.Context, _, _, _, _ string, _ bool) error {
 	return forge.ErrNotSupported

@@ -108,7 +108,8 @@ then converges the project:
   caveat. Missing role credentials are drift while the migration gate is
   `enforced`.
 * Creates two pipeline schedules: `fullsend slash poll` (every 5 minutes)
-  and `fullsend event poll` (at minutes 2, 17, 32, 47).
+  and `fullsend event poll` (at minutes 2, 17, 32, 47). Re-running install
+  reactivates either schedule if it exists but has been disabled.
 * Writes inference CI/CD variables when `--inference-project` is set.
 
 By default the scaffold lands as a merge request. Pass `--direct` to push

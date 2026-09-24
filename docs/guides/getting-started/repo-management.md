@@ -308,12 +308,14 @@ fullsend repos install -f repos.yaml --dry-run
 ```
 
 The convergence phase checks all components (workflow, thin callers,
-variables, secrets, pipeline schedules), scaffold content drift, declared
-configuration-preset drift, and scaffold workflow refs against the
-manifest. Missing or drifted components are repaired automatically; a
-changed preset replaces only `.fullsend/config.base.yaml` and leaves the
-overlay intact. Ref updates are committed as PRs (or direct pushes with
-`--direct`).
+variables, secrets, pipeline schedules — including reactivating GitLab
+schedules that exist but are disabled), scaffold content drift
+(including structural rewrites of `.gitlab/ci/fullsend-dispatch.yml` at
+an unchanged template ref), declared configuration-preset drift, and
+scaffold workflow refs against the manifest. Missing or drifted
+components are repaired automatically; a changed preset replaces only
+`.fullsend/config.base.yaml` and leaves the overlay intact. Ref updates
+are committed as PRs (or direct pushes with `--direct`).
 
 Use `repos status` for a read-only drift report (no changes applied):
 

@@ -504,9 +504,9 @@ For repos not yet in the manifest, adds them (requires --forge). For repos
 whose shim workflow is not yet on the default branch, scaffolds workflow
 files and writes variables/secrets onto the initialization branch, including
 re-runs while an initialization PR/MR is still open. For repos whose workflow
-is already on the default branch, reconciles variable drift, declared
-configuration-preset drift against .fullsend/config.base.yaml, and upgrades
-scaffold refs to match the manifest.
+is already on the default branch, reconciles variable drift, inactive GitLab
+pipeline schedules, declared configuration-preset drift against
+.fullsend/config.base.yaml, and upgrades scaffold refs to match the manifest.
 
 When repos are specified as positional arguments, only those repos are
 processed. Glob patterns (e.g. "acme/*") are matched against manifest
