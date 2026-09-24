@@ -212,7 +212,7 @@ type FakeClient struct {
 	// Protected branches for IsProtectedBranch.
 	ProtectedBranches map[string]bool // key: "owner/repo/branch"
 
-	// Pipeline schedules for List/Create/DeletePipelineSchedule.
+	// Pipeline schedules for List/Create/Delete/UpdatePipelineSchedule.
 	PipelineSchedules map[string][]PipelineSchedule // key: "owner/repo"
 
 	// Directory listings for ListDirectoryContents.
@@ -336,6 +336,7 @@ type FakeClient struct {
 	PipelineCalls           []PipelineCallRecord
 	CreatedSchedules        []PipelineSchedule
 	DeletedScheduleIDs      []int64
+	UpdatedScheduleIDs      []int64
 	UpdatedVariables        []VariableRecord
 	CreatedProtectedVars    []VariableRecord
 
@@ -2269,6 +2270,27 @@ func (f *FakeClient) DeletePipelineSchedule(_ context.Context, owner, repo strin
 		f.PipelineSchedules[key] = filtered
 	}
 	return nil
+}
+
+func (f *FakeClient) UpdatePipelineSchedule(_ context.Context, owner, repo string, scheduleID int64, active bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if e := f.err("UpdatePipelineSchedule"); e != nil {
+		return e
+	}
+
+	key := owner + "/" + repo
+	schedules := f.PipelineSchedules[key]
+	for i := range schedules {
+		if schedules[i].ID == scheduleID {
+			schedules[i].Active = active
+			f.PipelineSchedules[key] = schedules
+			f.UpdatedScheduleIDs = append(f.UpdatedScheduleIDs, scheduleID)
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: pipeline schedule %d", ErrNotFound, scheduleID)
 }
 
 func (f *FakeClient) ListPipelineSchedules(_ context.Context, owner, repo string) ([]PipelineSchedule, error) {

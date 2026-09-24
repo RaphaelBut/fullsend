@@ -201,16 +201,30 @@ func ProbeComponents(ctx context.Context, client forge.Client, owner, repo, forg
 		}
 		for _, spec := range pipelineScheduleSpecs {
 			found := false
+			active := false
 			for _, s := range schedules {
 				if s.Description == spec.Description {
 					found = true
-					break
+					if s.Active {
+						active = true
+						break
+					}
+				}
+			}
+			actual := ""
+			if found {
+				if active {
+					actual = "active"
+				} else {
+					actual = "inactive"
 				}
 			}
 			results = append(results, ComponentStatus{
-				Name:    spec.ComponentName,
-				Present: found,
-				Match:   found,
+				Name:     spec.ComponentName,
+				Present:  found,
+				Expected: "active",
+				Actual:   actual,
+				Match:    found && active,
 			})
 		}
 	}

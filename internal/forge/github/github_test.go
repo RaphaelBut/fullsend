@@ -4500,6 +4500,10 @@ func TestUnsupportedMethods(t *testing.T) {
 		_, err := client.ListPipelineSchedules(ctx, "o", "r")
 		assert.ErrorIs(t, err, forge.ErrNotSupported)
 	})
+	t.Run("UpdatePipelineSchedule", func(t *testing.T) {
+		err := client.UpdatePipelineSchedule(ctx, "o", "r", 1, true)
+		assert.ErrorIs(t, err, forge.ErrNotSupported)
+	})
 	t.Run("UpdateCIVariable", func(t *testing.T) {
 		err := client.UpdateCIVariable(ctx, "o", "r", "KEY", "val", false)
 		assert.ErrorIs(t, err, forge.ErrNotSupported)

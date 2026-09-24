@@ -331,6 +331,48 @@ func TestProbeComponents_GitLab_MissingSchedules(t *testing.T) {
 	}
 }
 
+func TestProbeComponents_GitLab_InactiveSchedule(t *testing.T) {
+	fc := forge.NewFakeClient()
+	fc.FileContents["acme/api/.gitlab/ci/fullsend-dispatch.yml"] = []byte("include:")
+	fc.Secrets["acme/api/"+forge.SecretGCPProjectID] = true
+	fc.Secrets["acme/api/"+forge.SecretGCPWIFProvider] = true
+	fc.Secrets["acme/api/"+forge.SecretForgeToken] = true
+	fc.PipelineSchedules["acme/api"] = []forge.PipelineSchedule{
+		{ID: 1, Description: "fullsend slash poll", Active: false},
+		{ID: 2, Description: "fullsend event poll", Active: true},
+	}
+
+	components, err := ProbeComponents(context.Background(), fc, "acme", "api", ForgeGitLab, GitLabForgeConfig(), nil)
+	if err != nil {
+		t.Fatalf("ProbeComponents() error = %v", err)
+	}
+	if AllMatch(components) {
+		t.Error("expected AllMatch=false when a required schedule is inactive")
+	}
+
+	for _, c := range components {
+		switch c.Name {
+		case "schedule:slash-poll":
+			if !c.Present {
+				t.Error("inactive slash poll should still be present")
+			}
+			if c.Match {
+				t.Error("inactive slash poll should not match")
+			}
+			if c.Expected != "active" || c.Actual != "inactive" {
+				t.Errorf("slash poll Expected/Actual = %q/%q, want active/inactive", c.Expected, c.Actual)
+			}
+		case "schedule:event-poll":
+			if !c.Present || !c.Match {
+				t.Errorf("active event poll = %+v, want present+match", c)
+			}
+			if c.Actual != "active" {
+				t.Errorf("event poll Actual = %q, want active", c.Actual)
+			}
+		}
+	}
+}
+
 func TestProbeComponents_GitLab_ScheduleCheckError(t *testing.T) {
 	fc := forge.NewFakeClient()
 	fc.FileContents["acme/api/.gitlab/ci/fullsend-dispatch.yml"] = []byte("include:")

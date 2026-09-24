@@ -108,7 +108,12 @@ then converges the project:
   caveat. Missing role credentials are drift while the migration gate is
   `enforced`.
 * Creates two pipeline schedules: `fullsend slash poll` (every 5 minutes)
-  and `fullsend event poll` (at minutes 2, 17, 32, 47).
+  and `fullsend event poll` (at minutes 2, 17, 32, 47). Re-running install
+  reports either schedule as drift if it exists but has been disabled,
+  without changing it; pass `--reactivate-schedules` to have install
+  re-enable it. Leave that flag unset on repos using [Off-system
+  polling](#off-system-polling), where the schedules are disabled on
+  purpose.
 * Writes inference CI/CD variables when `--inference-project` is set.
 
 By default the scaffold lands as a merge request. Pass `--direct` to push
@@ -221,7 +226,15 @@ when the instance's schedule cadence is too slow, from cron on a VM, a
 Kubernetes CronJob, or any scheduler with network access to your GitLab
 instance. Off-system polling replaces the in-CI schedules: disable or delete
 both `fullsend slash poll` and `fullsend event poll` before enabling the
-external jobs, or slash commands can be dispatched twice.
+external jobs, or slash commands can be dispatched twice. Prefer disabling
+over deleting: a later `repos install` reports a disabled required
+schedule as drift but leaves it disabled unless you pass
+`--reactivate-schedules`, while a deleted required schedule is always
+recreated (active) on the next install, since a missing schedule is
+treated as repairable drift regardless of that flag. Do not pass
+`--reactivate-schedules` on repos using off-system polling — it opts back
+into re-enabling a disabled schedule, restoring in-CI dispatch and the
+double-dispatch risk this section describes.
 
 ```bash
 export FULLSEND_FORGE_TOKEN="<bot-pat>"   # not GITLAB_TOKEN
@@ -508,7 +521,11 @@ Confirm:
   show `slash-poll differs, event-poll differs` instead (JSON: `field`
   values `slash-poll`/`event-poll` with `actual` `missing`) — that is
   expected; verify off-system `fullsend poll` instead, per
-  [Off-system polling](#off-system-polling) above.
+  [Off-system polling](#off-system-polling) above. A schedule that exists
+  but has been intentionally disabled for off-system polling reports the
+  same way (JSON: `expected` `active`, `actual` `inactive`) and is
+  likewise expected — `repos install` does not clear this drift unless
+  `--reactivate-schedules` is passed.
 * **Pipeline schedules** — Settings → CI/CD → Pipeline schedules shows
   `fullsend slash poll` and `fullsend event poll`, both active. On
   GitLab.com Free, the schedules may run at most 24 times per day; verify
