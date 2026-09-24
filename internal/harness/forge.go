@@ -122,19 +122,10 @@ func (h *Harness) validateForge() error {
 				return fmt.Errorf("forge.%s.host_files[%d].src must be a local path, not a URL", key, i)
 			}
 		}
-		if fc.ValidationLoop != nil {
-			if fc.ValidationLoop.Script == "" {
-				// Field-level merge inherits script from the top-level loop.
-				topHasScript := h.ValidationLoop != nil && h.ValidationLoop.Script != ""
-				if !topHasScript {
-					return fmt.Errorf("forge.%s.validation_loop.script is required when validation_loop is set", key)
-				}
-			} else if IsURL(fc.ValidationLoop.Script) {
-				return fmt.Errorf("forge.%s.validation_loop.script must be a local path, not a URL", key)
-			}
-			if fc.ValidationLoop.Schema != "" && IsURL(fc.ValidationLoop.Schema) {
-				return fmt.Errorf("forge.%s.validation_loop.schema must be a local path, not a URL", key)
-			}
+		// Field-level merge inherits script from the top-level loop.
+		topHasScript := h.ValidationLoop != nil && h.ValidationLoop.Script != ""
+		if err := validateValidationLoop(fmt.Sprintf("forge.%s", key), fc.ValidationLoop, topHasScript); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -154,6 +145,11 @@ func validateOverlayForgeConfig(idx int, fc *ForgeConfig) error {
 	return validateOverlayForgeConfigInherit(idx, fc, false)
 }
 
+// validateOverlayForgeConfigInherit validates a ForgeConfig embedded in an
+// overlay entry, applying the same checks as validateForge per entry. When
+// inheritScript is true, an empty validation_loop.script is allowed because
+// field-level merge will inherit it from the top-level validation_loop (see
+// validateValidationLoop).
 func validateOverlayForgeConfigInherit(idx int, fc *ForgeConfig, inheritScript bool) error {
 	prefix := fmt.Sprintf("overlays[%d]", idx)
 	if fc.Policy != "" && IsURL(fc.Policy) {
@@ -204,24 +200,27 @@ func validateOverlayForgeConfigInherit(idx int, fc *ForgeConfig, inheritScript b
 			return fmt.Errorf("%s.host_files[%d].src must be a local path, not a URL", prefix, i)
 		}
 	}
-	return validateOverlayValidationLoop(prefix, fc, inheritScript)
+	return validateValidationLoop(prefix, fc.ValidationLoop, inheritScript)
 }
 
-// validateOverlayValidationLoop applies validation_loop field checks to an
-// overlay ForgeConfig. When inheritScript is true, an empty script is
-// allowed because field-level merge will inherit it from the top level.
-func validateOverlayValidationLoop(prefix string, fc *ForgeConfig, inheritScript bool) error {
-	if fc.ValidationLoop == nil {
+// validateValidationLoop applies validation_loop field checks shared by both
+// forge platform blocks (validateForge) and overlay entries
+// (validateOverlayForgeConfigInherit): script is required unless
+// inheritScript allows an empty script to inherit from the top-level
+// validation_loop, script must not be a URL, and schema must not be a URL.
+// A nil vl is valid (no validation_loop set) and returns nil.
+func validateValidationLoop(prefix string, vl *ValidationLoop, inheritScript bool) error {
+	if vl == nil {
 		return nil
 	}
-	if fc.ValidationLoop.Script == "" {
+	if vl.Script == "" {
 		if !inheritScript {
 			return fmt.Errorf("%s.validation_loop.script is required when validation_loop is set", prefix)
 		}
-	} else if IsURL(fc.ValidationLoop.Script) {
+	} else if IsURL(vl.Script) {
 		return fmt.Errorf("%s.validation_loop.script must be a local path, not a URL", prefix)
 	}
-	if fc.ValidationLoop.Schema != "" && IsURL(fc.ValidationLoop.Schema) {
+	if vl.Schema != "" && IsURL(vl.Schema) {
 		return fmt.Errorf("%s.validation_loop.schema must be a local path, not a URL", prefix)
 	}
 	return nil
