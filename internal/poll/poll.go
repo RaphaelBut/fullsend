@@ -205,9 +205,9 @@ func (p *Poller) Run(ctx context.Context) error {
 		}
 	}
 
-	// Persist dispatched keys. Pipelines were already created via API
-	// during dispatch — if key persistence fails, events may re-dispatch
-	// on the next cycle (at-least-once delivery).
+	// Merge newly dispatched keys into the in-memory map. Pipelines were
+	// already created via API during dispatch — if the combined persist
+	// below fails, events may re-dispatch on the next cycle (at-least-once).
 	for k, ts := range newDispatchedKeys {
 		previouslyDispatched[k] = ts
 	}
@@ -238,16 +238,6 @@ func (p *Poller) Run(ctx context.Context) error {
 		log.Printf("persisting %d new dispatched keys: %v", len(keys), keys)
 	}
 
-	if err := p.persistDispatchedKeys(ctx, p.owner, p.repo, previouslyDispatched, newWatermark); err != nil {
-		return fmt.Errorf("persist dispatched keys: %w", err)
-	}
-	if err := p.persistFailedKeys(ctx, p.owner, p.repo, failedKeys); err != nil {
-		log.Printf("WARNING: failed to persist failed keys: %v", err)
-	}
-	if err := p.updateWatermark(ctx, p.owner, p.repo, newWatermark); err != nil {
-		log.Printf("WARNING: failed to update watermark: %v", err)
-	}
-
 	if labelState != nil {
 		for iid, failedLabels := range failedLabelEvents {
 			if current, ok := labelState[iid]; ok {
@@ -260,9 +250,15 @@ func (p *Poller) Run(ctx context.Context) error {
 				labelState[iid] = kept
 			}
 		}
-		if err := p.persistLabelState(ctx, p.owner, p.repo, labelState); err != nil {
-			log.Printf("WARNING: %v (next poll may re-dispatch label events)", err)
-		}
+	}
+
+	// One load-modify-save for dispatched keys, failed keys, watermark,
+	// and label state. Splitting these across separate commits created
+	// redundant poll-state history and skipped pipeline records.
+	// Pipelines were already created via API — if this persist fails,
+	// events may re-dispatch on the next cycle (at-least-once delivery).
+	if err := p.persistCycleState(ctx, p.owner, p.repo, previouslyDispatched, &newWatermark, failedKeys, labelState); err != nil {
+		return fmt.Errorf("persist poll state: %w", err)
 	}
 
 	log.Printf("poll complete: %d events discovered, %d dispatched", len(events), dispatched)
