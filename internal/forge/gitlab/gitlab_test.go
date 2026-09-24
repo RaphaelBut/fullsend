@@ -1235,6 +1235,47 @@ func TestCommitFiles(t *testing.T) {
 	assert.True(t, committed)
 }
 
+func TestCommitFiles_DuplicateCreatePaths(t *testing.T) {
+	client, mux := setupTest(t)
+
+	mux.HandleFunc("/api/v4/projects/owner%2Frepo", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": 1, "name": "repo", "path_with_namespace": "owner/repo",
+			"default_branch": "main", "visibility": "public",
+		})
+	})
+
+	mux.HandleFunc("/api/v4/projects/owner%2Frepo/repository/tree", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]map[string]any{})
+	})
+
+	mux.HandleFunc("/api/v4/projects/owner%2Frepo/repository/commits", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+
+		actions := body["actions"].([]any)
+		require.Len(t, actions, 1, "duplicate create actions for the same path must be collapsed")
+
+		action := actions[0].(map[string]any)
+		assert.Equal(t, "create", action["action"])
+		assert.Equal(t, ".gitlab/ci/scripts/trust-ci-server-ca.sh", action["file_path"])
+		got, err := base64.StdEncoding.DecodeString(action["content"].(string))
+		require.NoError(t, err)
+		assert.Equal(t, []byte("first"), got, "first actionable entry must win")
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{"id": "commit-sha-dup"})
+	})
+
+	committed, err := client.CommitFiles(context.Background(), "owner", "repo", "repair scaffold", []forge.TreeFile{
+		{Path: ".gitlab/ci/scripts/trust-ci-server-ca.sh", Content: []byte("first"), Mode: "100755"},
+		{Path: ".gitlab/ci/scripts/trust-ci-server-ca.sh", Content: []byte("second"), Mode: "100755"},
+	})
+	require.NoError(t, err)
+	assert.True(t, committed)
+}
+
 func TestCommitFiles_Idempotent(t *testing.T) {
 	client, mux := setupTest(t)
 

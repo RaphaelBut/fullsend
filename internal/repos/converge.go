@@ -872,8 +872,9 @@ func convergeRepo(ctx context.Context,
 	}
 	allScaffoldFiles = append(allScaffoldFiles, rootCIFiles...)
 
-	// Track paths already covered by ref upgrade and root CI migration
-	// to avoid duplicates.
+	// Track paths already queued so missing-component repair and
+	// content-drift detection skip duplicates. GitLab rejects two
+	// create actions for the same path in one commit (#7645).
 	refFileSet := make(map[string]bool, len(refFiles)+len(rootCIFiles))
 	for _, f := range refFiles {
 		refFileSet[f.Path] = true
@@ -903,8 +904,11 @@ func convergeRepo(ctx context.Context,
 			cr.Error = fmt.Errorf("convergence errors: %s", strings.Join(repairErrors, "; "))
 			return cr
 		}
-		allScaffoldFiles = append(allScaffoldFiles, repairFiles...)
 		for _, f := range repairFiles {
+			if refFileSet[f.Path] {
+				continue
+			}
+			allScaffoldFiles = append(allScaffoldFiles, f)
 			refFileSet[f.Path] = true
 		}
 	}
