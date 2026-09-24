@@ -29,6 +29,7 @@ Common configuration goals:
 | Teach agents your conventions | Use [AGENTS.md](customizing-with-agents-md.md) (no harness change needed) |
 | Give an agent domain knowledge | Use [skills](customizing-with-skills.md) (no harness change needed) |
 | Limit sandbox token privilege | Set `privilege_levels.runtime: read` so write tokens stay on pre/post scripts |
+| Authorize users via OWNERS file | Add `owners_file` to `authorization` in `config.yaml` |
 
 ## Configuration with `base:` composition
 
@@ -552,6 +553,77 @@ role name. The built-in agent names are: `code`, `triage`, `review`,
 agent named `code` — writing `name: coder` passes validation but
 disables nothing because no agent has that harness name.
 
+## Agent dispatch authorization
+
+By default, fullsend checks the forge's permission API to decide who can
+trigger agents. Users with `write` or above can trigger all agents; users
+with `triage` can trigger observation agents (`/fs-triage`, `/fs-review`)
+only. This applies to slash commands, label-triggered dispatch, and
+event-triggered dispatch alike. See the
+[Authorization Contract](../../normative/authorization/v1/README.md) for the
+full role hierarchy and exception rules.
+
+### Extending authorization with OWNERS files
+
+If your project uses Prow-style `OWNERS` files, you can use them as an
+additional authorization source so that listed approvers and reviewers can
+trigger agents without needing direct collaborator roles on the forge.
+
+#### Prerequisites
+
+- Fullsend is installed and configured for the repository.
+- An `OWNERS` file exists at the repository root.
+
+#### Setup
+
+1. Add the `owners_file` provider to `.fullsend/config.yaml`:
+
+   ```yaml
+   authorization:
+     - provider: owners_file
+   ```
+
+2. Ensure the `OWNERS` file has `approvers` and/or `reviewers` lists:
+
+   ```yaml
+   approvers:
+     - alice
+     - bob
+   reviewers:
+     - carol
+   ```
+
+   `approvers` receive `write`-equivalent access — all slash commands and
+   custom agents registered under `agents:`. `reviewers` receive
+   `triage`-equivalent access — `/fs-triage` and `/fs-review` only (custom
+   agents still require `write`).
+
+3. _(Optional)_ Define aliases in an `OWNERS_ALIASES` file at the repository
+   root:
+
+   ```yaml
+   aliases:
+     backend-team:
+       - alice
+       - bob
+   ```
+
+   Then reference the alias key in `OWNERS`:
+
+   ```yaml
+   approvers:
+     - backend-team
+   ```
+
+OWNERS can only **raise** a user's effective role, never lower it. Users not
+found in OWNERS fall through to the forge's permission API. The OWNERS file
+is read from the **base branch** (for PR events) or the **default branch**
+(otherwise), so a PR author cannot add themselves.
+
+For edge cases (parse failures, alias restrictions, character validation),
+see the
+[`authorization` config reference](../../reference/config-reference.md#authorization).
+
 ## See also
 
 - [Customizing Agents](customizing-overview.md) — overview of all customization approaches
@@ -561,6 +633,7 @@ disables nothing because no agent has that harness name.
 - [Configuring with Skills](customizing-with-skills.md) — extending agents with skills
 - [Default, derived, and custom agents](../../agents/topics/default-vs-custom.md) — when does configuration cross into derived or custom agent territory?
 - [Escalation ladder](../../agents/topics/escalation-ladder.md) — prove-it path before deriving or replacing a core agent
+- [Authorization Contract](../../normative/authorization/v1/README.md) — role hierarchy, thresholds, and exceptions
 - [Getting Started](../getting-started/) — initial setup
 - [Bugfix Workflow](bugfix-workflow.md) — how agents work together
 - [Standalone Mint](../infrastructure/standalone-mint.md) — running your own mint with custom agent roles
