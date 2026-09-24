@@ -843,6 +843,160 @@ func TestPersistFailedKeys_PrunesOverBudget(t *testing.T) {
 	}
 }
 
+// --- persistCycleState tests ---
+
+func TestPersistCycleState_WritesAllFieldsOnce(t *testing.T) {
+	mc := newMockClient()
+	mc.setPollState(persistedPollState{
+		LastPollAtFull:     "2020-01-01T00:00:00Z",
+		DispatchedKeysFull: map[string]int64{"old": 1},
+		FailedKeysFull:     map[string]int{"stale": 1},
+		LabelState:         LabelState{9: {"bug"}},
+	})
+	p := newTestPoller(mc, Options{})
+	wm := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
+	dispatched := map[string]int64{
+		"keep": wm.Unix() + 10,
+		"drop": wm.Unix() - 10,
+	}
+	failed := map[string]int{"retry": 2, "done": maxEventRetries + 1}
+	labels := LabelState{1: {"ready-to-code"}}
+
+	if err := p.persistCycleState(context.Background(), "testgroup", "testrepo", dispatched, &wm, failed, labels); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mc.forceCommits != 1 {
+		t.Errorf("force commits = %d, want 1", mc.forceCommits)
+	}
+
+	got, ok := mc.getPollState()
+	if !ok {
+		t.Fatal("expected poll state to be written")
+	}
+	if got.LastPollAtFull != wm.Format(time.RFC3339) {
+		t.Errorf("watermark = %q, want %q", got.LastPollAtFull, wm.Format(time.RFC3339))
+	}
+	if _, ok := got.DispatchedKeysFull["keep"]; !ok {
+		t.Error("expected keep key to be persisted")
+	}
+	if _, ok := got.DispatchedKeysFull["drop"]; ok {
+		t.Error("expected drop key to be pruned")
+	}
+	if got.FailedKeysFull["retry"] != 2 {
+		t.Errorf("retry count = %d, want 2", got.FailedKeysFull["retry"])
+	}
+	if _, exists := got.FailedKeysFull["done"]; exists {
+		t.Error("over-budget key should be pruned")
+	}
+	if got := got.LabelState[1]; len(got) != 1 || got[0] != "ready-to-code" {
+		t.Errorf("LabelState[1] = %v, want [ready-to-code]", got)
+	}
+}
+
+func TestPersistCycleState_NilFieldsPreserveExisting(t *testing.T) {
+	mc := newMockClient()
+	existingWM := "2025-01-01T00:00:00Z"
+	mc.setPollState(persistedPollState{
+		LastPollAtFull:     existingWM,
+		DispatchedKeysFull: map[string]int64{"keep-full": 99},
+		FailedKeysFull:     map[string]int{"keep-fail": 1},
+		LabelState:         LabelState{3: {"ready-to-code"}},
+	})
+	p := newTestPoller(mc, Options{})
+	if err := p.persistCycleState(context.Background(), "testgroup", "testrepo", nil, nil, nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mc.forceCommits != 1 {
+		t.Errorf("force commits = %d, want 1", mc.forceCommits)
+	}
+
+	got, ok := mc.getPollState()
+	if !ok {
+		t.Fatal("expected poll state")
+	}
+	if got.LastPollAtFull != existingWM {
+		t.Errorf("watermark clobbered: %q", got.LastPollAtFull)
+	}
+	if got.DispatchedKeysFull["keep-full"] != 99 {
+		t.Errorf("dispatched clobbered: %v", got.DispatchedKeysFull)
+	}
+	if got.FailedKeysFull["keep-fail"] != 1 {
+		t.Errorf("failed clobbered: %v", got.FailedKeysFull)
+	}
+	if got := got.LabelState[3]; len(got) != 1 || got[0] != "ready-to-code" {
+		t.Errorf("labels clobbered: %v", got)
+	}
+}
+
+func TestPersistCycleState_SlashModeIsolated(t *testing.T) {
+	mc := newMockClient()
+	mc.setPollState(persistedPollState{
+		LastPollAtFull:     "2020-01-01T00:00:00Z",
+		DispatchedKeysFull: map[string]int64{"keep-full": 99},
+	})
+	p := newTestPoller(mc, Options{})
+	p.slashCommandsOnly = true
+	wm := time.Date(2025, 7, 1, 0, 0, 0, 0, time.UTC)
+	if err := p.persistCycleState(context.Background(), "testgroup", "testrepo", map[string]int64{"slash": wm.Unix() + 1}, &wm, map[string]int{"n": 1}, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mc.forceCommits != 1 {
+		t.Errorf("force commits = %d, want 1", mc.forceCommits)
+	}
+
+	got, ok := mc.getSlashState()
+	if !ok {
+		t.Fatal("expected slash poll state")
+	}
+	if got.LastPollAtFast != wm.Format(time.RFC3339) {
+		t.Errorf("slash watermark = %q", got.LastPollAtFast)
+	}
+	if got.DispatchedKeysFast["slash"] == 0 {
+		t.Error("expected slash dispatched key")
+	}
+	if got.FailedKeysFast["n"] != 1 {
+		t.Errorf("FailedKeysFast = %v", got.FailedKeysFast)
+	}
+	if got.LastPollAtFull != "" || got.LabelState != nil {
+		t.Errorf("slash document must not carry events fields: %+v", got)
+	}
+	events, ok := mc.getPollState()
+	if !ok || events.DispatchedKeysFull["keep-full"] != 99 {
+		t.Error("full dispatched keys should be preserved on the events branch")
+	}
+}
+
+func TestPersistCycleState_DownloadError(t *testing.T) {
+	mc := newMockClient()
+	mc.fileContentErr = fmt.Errorf("timeout")
+	p := newTestPoller(mc, Options{})
+	wm := time.Now()
+	if err := p.persistCycleState(context.Background(), "testgroup", "testrepo", map[string]int64{"k": 1}, &wm, map[string]int{"k": 1}, nil); err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestPersistCycleState_UploadError(t *testing.T) {
+	mc := newMockClient()
+	mc.forceCommitErr = fmt.Errorf("upload boom")
+	p := newTestPoller(mc, Options{})
+	wm := time.Now()
+	if err := p.persistCycleState(context.Background(), "testgroup", "testrepo", nil, &wm, nil, nil); err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestPersistCycleState_FailsClosedWhenSecretEmpty(t *testing.T) {
+	mc := newMockClient()
+	p := newUnsignedTestPoller(mc)
+	wm := time.Now()
+	if err := p.persistCycleState(context.Background(), "testgroup", "testrepo", nil, &wm, nil, nil); err == nil {
+		t.Fatal("expected fail-closed error when no secret is configured, got nil")
+	} else if !errors.Is(err, errDispatchSecretUnset) {
+		t.Errorf("error = %v, want errDispatchSecretUnset", err)
+	}
+}
+
 // --- detectNewLabels tests ---
 
 func TestDetectNewLabels_NewLabelsDetected(t *testing.T) {

@@ -374,9 +374,11 @@ events); otherwise each branch is an empty signed baseline. Existing
 branch documents are not overwritten. `repos uninstall` deletes both
 branches via `DeleteRef` (a missing branch is ignored).
 
-Every poller save force-re-roots the mode's branch on the repository's
-root commit (`force: true` + `start_sha`), so the branch stays at base +
-1 commit and history never grows. The poller **fails closed** when
+Each poll cycle performs a single save of that mode's `state.json`
+(dispatched keys, failed-key retry counts, watermark, and label state
+together). Every save force-re-roots the mode's branch on the
+repository's root commit (`force: true` + `start_sha`), so the branch
+stays at base + 1 commit and history never grows. The poller **fails closed** when
 `FULLSEND_DISPATCH_SECRET` is unset (refuse load/write) or when a
 present `state.json` has a missing/invalid HMAC (discard the branch and
 fail that cycle). A missing branch or file is **not** tampering: the

@@ -84,6 +84,9 @@ func TestRunEmptyPoll(t *testing.T) {
 	if !ok || got.LastPollAtFull == "" {
 		t.Error("watermark not updated")
 	}
+	if mc.forceCommits != 1 {
+		t.Errorf("force commits = %d, want 1 (one persist per poll cycle)", mc.forceCommits)
+	}
 }
 
 func TestRunSlashMode(t *testing.T) {
@@ -109,6 +112,9 @@ func TestRunSlashMode(t *testing.T) {
 	}
 	if _, ok := mc.getPollState(); ok {
 		t.Error("slash mode must not write the events branch")
+	}
+	if mc.forceCommits != 1 {
+		t.Errorf("force commits = %d, want 1 (one persist per poll cycle)", mc.forceCommits)
 	}
 }
 
@@ -270,6 +276,15 @@ func TestRunMultipleStages(t *testing.T) {
 	got, ok := mc.getPollState()
 	if !ok || got.LabelState == nil {
 		t.Error("expected label state to be persisted")
+	}
+	if mc.forceCommits != 1 {
+		t.Errorf("force commits = %d, want 1 (one persist per poll cycle)", mc.forceCommits)
+	}
+	if got.LastPollAtFull == "" {
+		t.Error("expected watermark to be persisted in the same commit")
+	}
+	if len(got.DispatchedKeysFull) == 0 {
+		t.Error("expected dispatched keys to be persisted in the same commit")
 	}
 }
 
@@ -457,6 +472,9 @@ func TestRunAllEventsFailWatermarkNotAdvanced(t *testing.T) {
 	if ok && got.LastPollAtFull != "" && got.LastPollAtFull != since.Format(time.RFC3339) {
 		t.Error("watermark should not be advanced when all events fail")
 	}
+	if mc.forceCommits != 1 {
+		t.Errorf("force commits = %d, want 1 (failed keys only)", mc.forceCommits)
+	}
 }
 
 func TestRunNilRouter(t *testing.T) {
@@ -504,6 +522,9 @@ func TestRunIdempotentSecondPoll(t *testing.T) {
 	if mc.pipelineCounter != 1 {
 		t.Fatalf("first run: expected 1 pipeline, got %d", mc.pipelineCounter)
 	}
+	if mc.forceCommits != 1 {
+		t.Fatalf("first run: force commits = %d, want 1", mc.forceCommits)
+	}
 
 	// Branch-backed mock writes through, so the next cycle reads
 	// the state persisted by the first run.
@@ -516,6 +537,9 @@ func TestRunIdempotentSecondPoll(t *testing.T) {
 	// Second run should not create new pipelines (idempotent).
 	if mc.pipelineCounter != 1 {
 		t.Errorf("second run: expected no new pipelines (total 1), got %d", mc.pipelineCounter)
+	}
+	if mc.forceCommits != 2 {
+		t.Errorf("second run: force commits = %d, want 2 (one persist per cycle)", mc.forceCommits)
 	}
 }
 
