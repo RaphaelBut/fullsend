@@ -440,16 +440,17 @@ func printStatusTable(cmd *cobra.Command, result *repos.StatusResult) {
 // reposInstallConfig holds flags and test overrides for repos install.
 type reposInstallConfig struct {
 	// Core flags
-	manifest     string
-	dryRun       bool
-	repoFilter   []string
-	concurrency  int
-	roles        []string
-	rolesChanged bool
-	direct       bool
-	force        bool
-	gitlabToken  string
-	forge        string
+	manifest            string
+	dryRun              bool
+	repoFilter          []string
+	concurrency         int
+	roles               []string
+	rolesChanged        bool
+	direct              bool
+	force               bool
+	reactivateSchedules bool
+	gitlabToken         string
+	forge               string
 
 	// GCP credentials (install-time only)
 	inferenceProject       string
@@ -504,9 +505,11 @@ For repos not yet in the manifest, adds them (requires --forge). For repos
 whose shim workflow is not yet on the default branch, scaffolds workflow
 files and writes variables/secrets onto the initialization branch, including
 re-runs while an initialization PR/MR is still open. For repos whose workflow
-is already on the default branch, reconciles variable drift, inactive GitLab
-pipeline schedules, declared configuration-preset drift against
-.fullsend/config.base.yaml, and upgrades scaffold refs to match the manifest.
+is already on the default branch, reconciles variable drift, disabled GitLab
+pipeline schedules (reported as drift; reactivated only when
+--reactivate-schedules is passed), declared configuration-preset drift
+against .fullsend/config.base.yaml, and upgrades scaffold refs to match
+the manifest.
 
 When repos are specified as positional arguments, only those repos are
 processed. Glob patterns (e.g. "acme/*") are matched against manifest
@@ -536,6 +539,7 @@ GCP infrastructure (WIF, mint) must be provisioned separately via
 	cmd.Flags().StringSliceVar(&opts.roles, "roles", config.PerRepoDefaultRoles(), "agent roles to install")
 	cmd.Flags().BoolVar(&opts.direct, "direct", false, "push scaffold directly to default branch (skip PR)")
 	cmd.Flags().BoolVar(&opts.force, "force", false, "allow scaffold ref downgrades")
+	cmd.Flags().BoolVar(&opts.reactivateSchedules, "reactivate-schedules", false, "reactivate required GitLab pipeline schedules that exist but are disabled (leave disabled by default so off-system polling setups are not silently reverted)")
 	cmd.Flags().StringVar(&opts.forge, "forge", "", "forge type for repos not yet in the manifest (github or gitlab)")
 	cmd.Flags().StringVar(&opts.inferenceProject, "inference-project", "", "GCP project ID for inference")
 	cmd.Flags().StringVar(&opts.inferenceWIFProvider, "inference-wif-provider", "", "full WIF provider resource name (projects/{number}/locations/global/workloadIdentityPools/{pool}/providers/{id}); uses this provider for all repos instead of deriving per-repo providers")
@@ -889,6 +893,7 @@ func runReposInstall(ctx context.Context, opts *reposInstallConfig) error {
 		UpstreamTag:            upstreamTag,
 		Direct:                 opts.direct,
 		Force:                  opts.force,
+		ReactivateSchedules:    opts.reactivateSchedules,
 		InferenceProject:       opts.inferenceProject,
 		InferenceProjectNumber: opts.inferenceProjectNumber,
 		InferenceRegion:        opts.inferenceRegion,

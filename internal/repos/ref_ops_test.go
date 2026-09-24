@@ -365,7 +365,7 @@ func TestReplaceShimRef_DollarSignInRef(t *testing.T) {
 }
 
 func TestCollectGitLabUpgradeTemplates_IncludesPipelineWrapper(t *testing.T) {
-	files, err := collectGitLabUpgradeTemplates(nil, "v0.1.0")
+	files, err := collectGitLabUpgradeTemplates(nil, "v0.1.0", "")
 	if err != nil {
 		t.Fatalf("collectGitLabUpgradeTemplates: %v", err)
 	}

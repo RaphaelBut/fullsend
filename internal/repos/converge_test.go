@@ -2283,8 +2283,10 @@ func TestConverge_GitLab_ReactivatesInactiveSchedules(t *testing.T) {
 		{ID: 2, Description: "fullsend event poll", Active: true},
 	}
 
+	cfg := gitlabConvergeCfg("acme/api")
+	cfg.ReactivateSchedules = true
 	sc := &fakeScaffoldCommit{}
-	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), noopProgress)
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), sc.fn(), noopProgress)
 	if err != nil {
 		t.Fatalf("Converge() error: %v", err)
 	}
@@ -2337,6 +2339,7 @@ func TestConverge_GitLab_ReactivatesInactiveSchedules_DryRun(t *testing.T) {
 
 	cfg := gitlabConvergeCfg("acme/api")
 	cfg.DryRun = true
+	cfg.ReactivateSchedules = true
 	sc := &fakeScaffoldCommit{}
 	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), sc.fn(), noopProgress)
 	if err != nil {
@@ -2375,8 +2378,10 @@ func TestConverge_GitLab_ActivateScheduleError(t *testing.T) {
 	}
 	fc.Errors["UpdatePipelineSchedule"] = fmt.Errorf("schedule API error")
 
+	cfg := gitlabConvergeCfg("acme/api")
+	cfg.ReactivateSchedules = true
 	sc := &fakeScaffoldCommit{}
-	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), noopProgress)
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), sc.fn(), noopProgress)
 	if err != nil {
 		t.Fatalf("Converge() error: %v", err)
 	}
@@ -2391,6 +2396,55 @@ func TestConverge_GitLab_ActivateScheduleError(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected error action for failed schedule activation")
+	}
+}
+
+// TestConverge_GitLab_DisabledSchedulesNotReactivatedByDefault verifies
+// that a required-but-disabled GitLab pipeline schedule is reported as
+// drift and left alone unless --reactivate-schedules (ConvergeConfig.
+// ReactivateSchedules) is set. Operators running off-system polling
+// (see "Off-system polling" in configuring-gitlab.md) intentionally
+// disable these schedules; converge must not silently re-enable them.
+func TestConverge_GitLab_DisabledSchedulesNotReactivatedByDefault(t *testing.T) {
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	populateGitLabScaffoldContent(t, fc, "acme", "api", "v2.5.0")
+	fc.PipelineSchedules["acme/api"] = []forge.PipelineSchedule{
+		{ID: 1, Description: "fullsend slash poll", Active: false},
+		{ID: 2, Description: "fullsend event poll", Active: true},
+	}
+
+	sc := &fakeScaffoldCommit{}
+	result, err := Converge(context.Background(), gitlabConvergeCfg("acme/api"), newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 0 {
+		t.Fatalf("expected 0 failed, got %d: %+v", len(result.Failed()), result.Results[0].Error)
+	}
+
+	var reported bool
+	for _, a := range result.Results[0].Actions {
+		if a.Component == "schedule:slash-poll" {
+			reported = true
+			if a.Action != "none" {
+				t.Errorf("action = %q, want %q (default must not mutate a disabled schedule)", a.Action, "none")
+			}
+			if !strings.Contains(a.Detail, "not reactivating") {
+				t.Errorf("detail = %q, want a not-reactivating explanation", a.Detail)
+			}
+		}
+	}
+	if !reported {
+		t.Error("expected a schedule:slash-poll action reporting the disabled drift")
+	}
+	if len(fc.UpdatedScheduleIDs) != 0 {
+		t.Errorf("default converge must not call UpdatePipelineSchedule, got %v", fc.UpdatedScheduleIDs)
+	}
+	for _, s := range fc.PipelineSchedules["acme/api"] {
+		if s.Description == "fullsend slash poll" && s.Active {
+			t.Error("slash poll schedule should remain disabled after converge without --reactivate-schedules")
+		}
 	}
 }
 
@@ -2451,7 +2505,7 @@ func TestConvergeSchedules_UnrecognizedMissing(t *testing.T) {
 	}
 	actions := convergeSchedules(ctx, resolved, []ComponentStatus{
 		{Name: "schedule:unknown", Present: false, Match: false},
-	}, false, noopProgress)
+	}, false, false, noopProgress)
 	var found bool
 	for _, a := range actions {
 		if a.Action == "error" && strings.Contains(a.Detail, "unrecognized schedule component") {
@@ -2460,6 +2514,66 @@ func TestConvergeSchedules_UnrecognizedMissing(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected unrecognized-component error, got %+v", actions)
+	}
+}
+
+// TestConverge_GitLab_RefUpgradePreservesSHAPinning verifies that when a
+// GitLab dispatch marker is SHA-pinned (e.g. "ref: <sha> (<tag>)") and
+// the target ref is a semver tag, upgrading the ref resolves the new tag
+// to a SHA and writes both the new SHA and its tag annotation into the
+// committed dispatch marker via collectGitLabUpgradeTemplates. Before
+// the fix, collectGitLabUpgradeTemplates was called with the bare
+// target tag and no tag annotation, so the committed marker lost SHA
+// pinning permanently once this path executed for a repo (the
+// SHA-preservation branch never re-engages once the marker reads back a
+// plain tag).
+func TestConverge_GitLab_RefUpgradePreservesSHAPinning(t *testing.T) {
+	oldSHA := "abc123def456789012345678901234567890abcd"
+	newSHA := "def456abc789012345678901234567890abcd1234"
+
+	fc := newFakeClientForBatch("acme/api")
+	populateGitLabInstalled(fc, "acme", "api")
+	populateGitLabScaffoldContent(t, fc, "acme", "api", "v2.5.0")
+	// Dispatch marker is SHA-pinned with a tag annotation.
+	fc.FileContents["acme/api/.gitlab/ci/fullsend-dispatch.yml"] = []byte(
+		fmt.Sprintf("---\nref: %s (v2.5.0)\n", oldSHA))
+
+	// Target v3.0.0 resolves to newSHA via the (GitHub) shim ref resolver.
+	// No CommitAncestry entry is registered, so the SHA-downgrade check's
+	// ancestry lookup fails and falls back to proceeding as an upgrade
+	// (see convergeRefFiles' graceful-degradation warning path).
+	fc.Refs["fullsend-ai/fullsend/tags/v3.0.0"] = newSHA
+
+	cfg := gitlabConvergeCfg("acme/api")
+	cfg.Manifest.GitLab.FullsendRef = "v3.0.0"
+
+	sc := &spyScaffoldCommit{}
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatalf("Converge() error: %v", err)
+	}
+	if len(result.Failed()) != 0 {
+		t.Fatalf("expected 0 failed, got %d: %+v", len(result.Failed()), result.Results[0].Error)
+	}
+
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	var foundDispatch bool
+	for _, f := range sc.files {
+		if f.Path != ".gitlab/ci/fullsend-dispatch.yml" {
+			continue
+		}
+		foundDispatch = true
+		body := string(f.Content)
+		if !strings.Contains(body, newSHA) {
+			t.Errorf("committed dispatch marker should carry the resolved SHA %s; got:\n%s", newSHA, body)
+		}
+		if !strings.Contains(body, "(v3.0.0)") {
+			t.Errorf("committed dispatch marker should preserve the tag annotation (v3.0.0); got:\n%s", body)
+		}
+	}
+	if !foundDispatch {
+		t.Fatal("expected fullsend-dispatch.yml in committed files")
 	}
 }
 

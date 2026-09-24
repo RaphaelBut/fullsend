@@ -49,6 +49,15 @@ type ConvergeConfig struct {
 	// Force allows downgrades when upgrading refs.
 	Force bool
 
+	// ReactivateSchedules opts in to reactivating a required GitLab
+	// pipeline schedule (fullsend slash poll / fullsend event poll) that
+	// exists but is disabled. Defaults to false: operators running
+	// off-system polling (see "Off-system polling" in
+	// configuring-gitlab.md) intentionally disable these schedules, so a
+	// disabled-but-present schedule is reported as drift but left alone
+	// unless this is set.
+	ReactivateSchedules bool
+
 	// InferenceProject is the GCP project ID for inference.
 	InferenceProject string
 	// InferenceProjectNumber is the numeric GCP project number,
@@ -814,7 +823,7 @@ func convergeRepo(ctx context.Context,
 
 	// 2c: Converge pipeline schedules (GitLab only).
 	if resolved.Forge == ForgeGitLab {
-		schedActions := convergeSchedules(ctx, resolved, d.components, cfg.DryRun, progress)
+		schedActions := convergeSchedules(ctx, resolved, d.components, cfg.DryRun, cfg.ReactivateSchedules, progress)
 		cr.Actions = append(cr.Actions, schedActions...)
 	}
 
@@ -1162,11 +1171,16 @@ func convergeSecrets(ctx context.Context,
 // GitLab repos and creates or reactivates them. This repairs the gap
 // where a partial install committed scaffold and variables but failed
 // before schedule creation, and the gap where a required schedule exists
-// but was disabled.
+// but was disabled. Reactivating a disabled-but-present schedule is
+// opt-in via reactivate (see ConvergeConfig.ReactivateSchedules):
+// operators running off-system polling intentionally disable these
+// schedules, so by default a disabled schedule is only reported as
+// drift, not silently re-enabled.
 func convergeSchedules(ctx context.Context,
 	resolved ResolvedConfig,
 	components []ComponentStatus,
 	dryRun bool,
+	reactivate bool,
 	progress ProgressFunc) []ComponentAction {
 
 	var actions []ComponentAction
@@ -1190,6 +1204,17 @@ func convergeSchedules(ctx context.Context,
 			continue
 		}
 		missingSchedules = append(missingSchedules, c.Name)
+	}
+
+	if !reactivate {
+		for _, name := range inactiveSchedules {
+			actions = append(actions, ComponentAction{
+				Component: name,
+				Action:    "none",
+				Detail:    fmt.Sprintf("%s is disabled; not reactivating (pass --reactivate-schedules to repair)", DriftFieldName(name)),
+			})
+		}
+		inactiveSchedules = nil
 	}
 
 	if len(missingSchedules) == 0 && len(inactiveSchedules) == 0 {
@@ -1694,7 +1719,7 @@ func convergeRefFiles(ctx context.Context,
 	// Unchanged-ref structural drift is repaired by convergeContentDriftFiles.
 	if changed && resolved.Forge == ForgeGitLab {
 		templateFiles, tplErr := collectGitLabUpgradeTemplates(
-			gitlabRunnerTags(cfg.Manifest), targetRef,
+			gitlabRunnerTags(cfg.Manifest), newRef, newTag,
 		)
 		if tplErr != nil {
 			actions = append(actions, ComponentAction{
@@ -1871,7 +1896,7 @@ func convergeScaffoldFiles(ctx context.Context,
 			templateRef = rref.ref
 		}
 		templateFiles, tplErr := collectGitLabUpgradeTemplates(
-			gitlabRunnerTags(cfg.Manifest), templateRef,
+			gitlabRunnerTags(cfg.Manifest), templateRef, "",
 		)
 		if tplErr != nil {
 			actions = append(actions, ComponentAction{

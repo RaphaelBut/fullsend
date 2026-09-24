@@ -73,15 +73,17 @@ func formatRefAnnotation(ref, tag, forgeName string) string {
 // replaceShimRef only rewrites the version-marker line and would leave a
 // stale pre-#7322 body in place when the ref changes. Unchanged-ref
 // structural drift of that file is repaired by convergeContentDriftFiles.
-// The targetRef is used as the fullsend version embedded in the
-// before_script install block and as the dispatch file's version marker.
-// The root .gitlab-ci.yml is user-owned and is not synced here;
-// structural changes to it (like #7322's rule removal or #7337's stage
-// removal) need an explicit converge-time migration — see
-// convergeGitLabRootCIFiles / StripObsoleteGitLabWorkflowRules
-// / StripObsoleteGitLabStages.
-func collectGitLabUpgradeTemplates(runnerTags []string, targetRef string) ([]forge.TreeFile, error) {
-	installFiles, err := scaffold.CollectGitLabPerRepoInstallFiles(runnerTags, targetRef, "")
+// targetRef is used as the fullsend version embedded in the before_script
+// install block and as the dispatch file's version marker; targetTag is
+// the human-readable tag annotation to pair with a SHA-pinned targetRef
+// (empty when there is no separate tag to preserve, e.g. targetRef is
+// already a plain tag or branch). The root .gitlab-ci.yml is user-owned
+// and is not synced here; structural changes to it (like #7322's rule
+// removal or #7337's stage removal) need an explicit converge-time
+// migration — see convergeGitLabRootCIFiles /
+// StripObsoleteGitLabWorkflowRules / StripObsoleteGitLabStages.
+func collectGitLabUpgradeTemplates(runnerTags []string, targetRef, targetTag string) ([]forge.TreeFile, error) {
+	installFiles, err := scaffold.CollectGitLabPerRepoInstallFiles(runnerTags, targetRef, targetTag)
 	if err != nil {
 		return nil, err
 	}
