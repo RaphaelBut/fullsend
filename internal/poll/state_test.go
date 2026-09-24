@@ -843,6 +843,51 @@ func TestPersistFailedKeys_PrunesOverBudget(t *testing.T) {
 	}
 }
 
+// TestPersistFailedKeys_PreservesOtherFields guards the nil-vs-empty-map
+// distinction persistCycleState relies on: persistFailedKeys only sets the
+// failed-keys field (passing nil for dispatched/watermark/labels), so a
+// failed-keys-only persist must leave the watermark, dispatched keys, and
+// label state untouched. This is the path Run takes on poll.go's
+// all-dispatches-failed branch.
+func TestPersistFailedKeys_PreservesOtherFields(t *testing.T) {
+	mc := newMockClient()
+	existingWM := "2025-01-01T00:00:00Z"
+	mc.setPollState(persistedPollState{
+		LastPollAtFull:     existingWM,
+		DispatchedKeysFull: map[string]int64{"keep-full": 99},
+		FailedKeysFull:     map[string]int{"stale": 1},
+		LabelState:         LabelState{3: {"ready-to-code"}},
+	})
+	p := newTestPoller(mc, Options{})
+	keys := map[string]int{"retry": 2}
+	if err := p.persistFailedKeys(context.Background(), "testgroup", "testrepo", keys); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mc.forceCommits != 1 {
+		t.Errorf("force commits = %d, want 1", mc.forceCommits)
+	}
+
+	got, ok := mc.getPollState()
+	if !ok {
+		t.Fatal("expected poll state to be written")
+	}
+	if got.LastPollAtFull != existingWM {
+		t.Errorf("watermark clobbered: %q, want %q", got.LastPollAtFull, existingWM)
+	}
+	if got.DispatchedKeysFull["keep-full"] != 99 {
+		t.Errorf("dispatched keys clobbered: %v", got.DispatchedKeysFull)
+	}
+	if labels := got.LabelState[3]; len(labels) != 1 || labels[0] != "ready-to-code" {
+		t.Errorf("label state clobbered: %v", got.LabelState)
+	}
+	if got.FailedKeysFull["retry"] != 2 {
+		t.Errorf("retry count = %d, want 2", got.FailedKeysFull["retry"])
+	}
+	if _, exists := got.FailedKeysFull["stale"]; exists {
+		t.Error("stale failed key from the previous cycle should have been replaced")
+	}
+}
+
 // --- persistCycleState tests ---
 
 func TestPersistCycleState_WritesAllFieldsOnce(t *testing.T) {

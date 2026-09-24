@@ -449,7 +449,11 @@ func TestRunAllEventsFailWatermarkNotAdvanced(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	since := now.Add(-20 * time.Minute)
 	mc := newMockClient()
-	mc.setPollState(persistedPollState{LastPollAtFull: since.Format(time.RFC3339)})
+	mc.setPollState(persistedPollState{
+		LastPollAtFull:     since.Format(time.RFC3339),
+		DispatchedKeysFull: map[string]int64{"prior-dispatch": now.Unix()},
+		LabelState:         LabelState{99: {"ready-to-code"}},
+	})
 	mc.issues = []Issue{
 		{IID: 1, Labels: []string{"bug"}, UpdatedAt: now},
 		{IID: 2, Labels: []string{"bug"}, UpdatedAt: now},
@@ -474,6 +478,12 @@ func TestRunAllEventsFailWatermarkNotAdvanced(t *testing.T) {
 	}
 	if mc.forceCommits != 1 {
 		t.Errorf("force commits = %d, want 1 (failed keys only)", mc.forceCommits)
+	}
+	if !ok || got.DispatchedKeysFull["prior-dispatch"] != now.Unix() {
+		t.Errorf("dispatched keys from a prior cycle should survive an all-failed persist: %v", got.DispatchedKeysFull)
+	}
+	if got := got.LabelState[99]; len(got) != 1 || got[0] != "ready-to-code" {
+		t.Errorf("label state from a prior cycle should survive an all-failed persist: %v", got)
 	}
 }
 
