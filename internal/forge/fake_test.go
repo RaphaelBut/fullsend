@@ -1580,6 +1580,23 @@ func TestFakeClient_PipelineScheduleRoundTrip(t *testing.T) {
 	assert.Equal(t, "0 0 * * *", schedules[0].Cron)
 	assert.True(t, schedules[0].Active)
 
+	err = fc.UpdatePipelineSchedule(ctx, "org", "repo", id, false)
+	require.NoError(t, err)
+	schedules, err = fc.ListPipelineSchedules(ctx, "org", "repo")
+	require.NoError(t, err)
+	require.Len(t, schedules, 1)
+	assert.False(t, schedules[0].Active)
+	assert.Equal(t, []int64{id}, fc.UpdatedScheduleIDs)
+
+	err = fc.UpdatePipelineSchedule(ctx, "org", "repo", 999, true)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotFound)
+
+	fc.Errors["UpdatePipelineSchedule"] = errors.New("api error")
+	err = fc.UpdatePipelineSchedule(ctx, "org", "repo", id, true)
+	require.Error(t, err)
+	delete(fc.Errors, "UpdatePipelineSchedule")
+
 	err = fc.DeletePipelineSchedule(ctx, "org", "repo", id)
 	require.NoError(t, err)
 

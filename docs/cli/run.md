@@ -76,7 +76,10 @@ harness's skills have been read — so the sandbox exists but the agent has not 
 
 ## Output artifacts
 
-Each run produces artifacts in the output directory:
+Each run produces artifacts in the output directory. Relative `--output-dir`
+values are resolved to an absolute path before the run directory is created, so
+`FULLSEND_VALIDATED_ITERATION_DIR` (injected into the post-script) does not
+depend on the process cwd.
 
 | File | Description |
 |------|-------------|
@@ -125,14 +128,16 @@ parent's stream, so without it `total_cost_usd` would grow with no way to attrib
 ## Budget and deadline
 
 Each agent iteration gets the harness's `timeout_minutes` (30 when it sets none). When the budget
-is spent the runner ends the iteration and terminates the agent's processes in the sandbox. Before
-every iteration it tells the agent when that will happen, through two environment variables set on
-every runtime (claude, pi, codex):
+is spent the runner ends the iteration and sweeps the processes the agent left running in the
+sandbox, best effort. Before every iteration the runner rewrites `.fullsend/iteration.env` (sourced
+last by the sandbox `.env`) with the budget, the kill time, and this iteration's W3C trace context,
+on every runtime (claude, pi, codex):
 
 | Variable | Value |
 |---|---|
 | `FULLSEND_TIMEOUT_MINUTES` | The budget: the harness's `timeout_minutes`, or `30` when it sets none |
 | `FULLSEND_ITERATION_DEADLINE` | Unix time (seconds) at which the running iteration is killed |
+| `TRACEPARENT` | W3C trace context of this iteration's **agent** span (not the run-root span that pre/post scripts receive). Runtimes use it to join Fullsend traces. An inbound unsampled parent (`-00`) is preserved so runtime export stays suppressed. Empty when telemetry produced no valid span context. Reserved: an `env.sandbox` entry with this name is dropped. |
 
 **Example.** A probe that shows both, and what a kill looks like. The agent prints the variables
 with its own clock, then sleeps past the budget:
@@ -178,8 +183,8 @@ FULLSEND_TIMEOUT_MINUTES=1
 
 The last line is the agent's `date +%s`: the deadline is 47 seconds ahead of it. The runner's
 heartbeat counts down to the same instant. At the budget the runner ends the exec (it records exit
-code `-1`), terminates the processes the agent left running in the sandbox, extracts what the agent
-wrote, and the loop stops after the first iteration:
+code `-1`), sweeps the processes the agent left running in the sandbox (best effort), extracts what
+the agent wrote, and the loop stops after the first iteration:
 
 ```console
   ⏳ Agent running (30s elapsed, 30s remaining)
@@ -230,7 +235,9 @@ For comparison:
   every iteration fails that way the run ends with `validation failed after N iteration(s)`.
 - The kill lands at the deadline or a few seconds after it. Treat the deadline as the hard stop and
   write your result before it.
-- The budget ends the agent's exec, not its processes: OpenShell has no per-exec kill, so the
+- The budget ends the agent's exec, not its processes: OpenShell has no per-exec kill by design (an
+  exec's processes are not expected to exit with the caller,
+  [NVIDIA/OpenShell#3159](https://github.com/NVIDIA/OpenShell/issues/3159)), so the
   runner sweeps the processes the agent left running before it extracts the output, under
   `--keep-sandbox` too. The sweep is best effort, like the one between iterations: a sweep that
   fails prints `Warning: could not terminate stray sandbox processes` and the run continues.

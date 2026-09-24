@@ -121,7 +121,9 @@ repo baseline and overrides)
   for the current field classifications and merge rules). Forge blocks
   inherit from top-level defaults and override only deltas
   ([ADR 0045](ADRs/0045-forge-portable-harness-schema.md), superseded by
-  [ADR 0088](ADRs/0088-cel-guarded-overlays.md)).
+  [ADR 0088](ADRs/0088-cel-guarded-overlays.md)). `validation_loop` fields
+  merge independently during `base:` composition and forge/overlay
+  resolution: child/forge non-zero values win, omitted fields inherit.
 - Unified env var delivery: a single `env:` key with `runner` and `sandbox`
   sub-maps replaces `runner_env` and manual `.env` files. The runner generates
   the sandbox `.env` file from `env.sandbox` at bootstrap. `runner_env` is

@@ -636,7 +636,7 @@ injection > insider > drift > supply chain):
 
 - `IsProtectedBranch` — maps to GitHub branch protection API and GitLab
   protected branches API
-- `CreatePipelineSchedule` / `DeletePipelineSchedule` — GitLab-native; GitHub
+- `CreatePipelineSchedule` / `DeletePipelineSchedule` / `UpdatePipelineSchedule` — GitLab-native; GitHub
   returns `ErrNotSupported`
 - `UpdateCIVariable` — for poll watermark management
   > **Update (2026-09, #7343):** Poll watermarks are no longer CI/CD

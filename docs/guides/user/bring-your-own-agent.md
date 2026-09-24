@@ -76,7 +76,7 @@ Building and deploying a custom agent takes four steps:
 ## Before you begin
 
 - **fullsend CLI** installed and available on your PATH.
-- **Repository scaffolded.** Run [`fullsend github setup`](../getting-started/configuring-github.md) first — it creates `.fullsend/config.yaml` and the dispatch workflow. It does **not** create `policies/`, `providers/` or `profiles/`; [`fullsend agent new`](#step-0-generate-the-skeleton) writes those, and you commit them with the agent. Writing the harness by hand instead? [Minimum viable agent](#minimum-viable-agent) lists what to supply. GitLab repositories are scaffolded instead with `fullsend repos install --forge gitlab` and use `FULLSEND_FORGE_TOKEN` rather than GitHub Apps — see [Configuring GitLab](../getting-started/configuring-gitlab.md).
+- **Repository scaffolded.** Run [`fullsend github setup`](../getting-started/configuring-github.md) first — it creates `.fullsend/config.yaml` and the dispatch workflow. It does **not** create `policies/`, `providers/` or `profiles/`; [`fullsend agent new`](#step-0-generate-the-skeleton) writes those, and you commit them with the agent. Writing the harness by hand instead? [Minimum viable agent](#minimum-viable-agent) lists what to supply. GitLab repositories are scaffolded instead with `fullsend repos install --forge gitlab` and use role-specific project access tokens rather than GitHub Apps — see [Configuring GitLab](../getting-started/configuring-gitlab.md).
 - **GCP inference provisioned (CI only).** For agents running in GitHub Actions, run [`fullsend inference provision`](../../cli/inference.md) to set up Workload Identity Federation.
 - **GitHub Apps installed (CI only).** Your org needs the fullsend GitHub Apps — see [Configuring GitHub](../getting-started/configuring-github.md).
 
@@ -221,8 +221,10 @@ Your only output is the JSON result file.
 ````
 
 The agent's environment also carries its budget: `FULLSEND_TIMEOUT_MINUTES` (the harness's
-`timeout_minutes`) and `FULLSEND_ITERATION_DEADLINE` (Unix seconds at which the iteration is killed).
-Write the result before the deadline — see [`fullsend run` § Budget and deadline](../../cli/run.md#budget-and-deadline).
+`timeout_minutes`) and `FULLSEND_ITERATION_DEADLINE` (Unix seconds at which the iteration is killed),
+and `TRACEPARENT` (this iteration's agent-span W3C trace context, so runtime telemetry joins the
+Fullsend trace; empty when telemetry produced no valid span context). Write the result before the
+deadline — see [`fullsend run` § Budget and deadline](../../cli/run.md#budget-and-deadline).
 
 Network access (which APIs the agent can reach) is controlled by provider profiles or inline `network_policies`. The six built-in profiles (`vertex-ai`, `github`, `github-ro`, `github-artifacts`, `gitleaks`, `package-registries`) use framework-known `type` values (e.g. `fullsend-vertex-ai`, `fullsend-github`), but — like a fully custom provider type — still need a matching `openshell.profiles` entry (or one inherited via `base:` composition) to be imported; only the profile's `type` value is framework-known, not its import path. When defining a fully custom provider type, reference a remote provider definition together with a matching `openshell.profiles` entry (see [Remote providers and profiles](customizing-agents.md#remote-providers-and-profiles)). For endpoints not covered by providers, inline `network_policies` in the policy YAML also work. Providers are the pattern used by fullsend's built-in agents, but custom agents can use whichever approach fits.
 
@@ -395,6 +397,7 @@ fullsend agent add harness/my-agent.yaml --name my-agent --fullsend-dir .fullsen
 # List / update / remove:
 fullsend agent list --fullsend-dir .fullsend
 fullsend agent update triage <sha> --fullsend-dir .fullsend
+fullsend agent update code --fullsend-dir .fullsend   # re-pins base: in a local harness
 fullsend agent remove triage --fullsend-dir .fullsend
 ```
 

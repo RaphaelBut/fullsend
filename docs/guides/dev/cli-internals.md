@@ -114,7 +114,7 @@ fullsend
 │   │   ├── --runtime <claude|pi>            #   Runtime for this agent
 │   │   ├── --model <alias|id|provider/id>   #   Model for this agent
 │   │   └── --effort <level>                 #   Effort level for this agent
-│   ├── update       <name> [sha]             # Re-pin URL agent to new commit SHA
+│   ├── update       <name> [sha]             # Re-pin URL agent or local harness base
 │   └── remove       <name>                   # Unregister agent from config
 ├── lock             [agent-name]              # Pin remote deps to lock.yaml
 │   ├── --all                                #   Lock all harnesses in the harness directory
@@ -157,7 +157,7 @@ fullsend
 │       ├── --marker <string>                #     Sticky marker for idempotent updates (HTML comment or Jira property)
 │       ├── --keep-history                   #     Append previous content as collapsed history (default true)
 │       └── --fullsend-dir <path>            #     .fullsend config directory (resolves keep_history default)
-├── post-review                              # Post PR/MR review comments to GitHub or GitLab
+├── post-review                              # Post sticky PR/MR review comments (formal review is best-effort)
 │   ├── --forge <forge>                      #   Forge backend: github (default) or gitlab
 │   ├── --base-url <url>                     #   Forge instance URL (e.g. https://gitlab.example.com)
 │   ├── --repo <owner/repo>                  #   Repository in owner/repo format
@@ -329,7 +329,7 @@ Both per-org and per-repo modes share the same core pipeline. The code follows t
 │  │  │           + client IDs as repo variables │              │ │
 │  │  │                                          │              │ │
 │  │  │ Per-repo: secrets → target repo          │              │ │
-│  │  │           + FULLSEND_PER_REPO_GUARD=true │              │ │
+│  │  │          + FULLSEND_PER_REPO_INSTALL=true│              │ │
 │  │  │                                          │              │ │
 │  │  │ NOTE: Per-repo runs Phase 6 before       │              │ │
 │  │  │ Phase 5 (vars/secrets before scaffold    │              │ │
@@ -358,7 +358,7 @@ Both modes call the same functions (`runAppSetup`, `gcf.NewProvisioner`, `Provis
 | **3. Mint** | `gcf.Provision()` or `EnsureOrgInMint()` | — | — (use `mint enroll` separately) |
 | **4. WIF** | `ProvisionWIF()` | Org-wide provider ID | `mintcore.BuildRepoProviderID()` (repo-scoped, GitHub only; GitLab uses shared `gitlab-oidc` provider) |
 | **5. Scaffold** | `repos.BuildScaffoldFiles()` (via `scaffold.CollectPerRepoInstallFiles()`) | Creates `.fullsend` repo, pushes workflows + optional binary | Writes `.fullsend/` dir + shim workflow + thin caller workflows + optional binary in target repo (committed after secrets in per-repo, see #6122) |
-| **6. Secrets** | Same secret names, same API calls | Config repo + org variable | Target repo + `PER_REPO_GUARD` (written before scaffold commit in per-repo, see #6122) |
+| **6. Secrets** | Same secret names, same API calls | Config repo + org variable | Target repo + `FULLSEND_PER_REPO_INSTALL` (written before scaffold commit in per-repo, see #6122) |
 | **7. Enrollment** | — | `EnrollmentLayer` enables repos | No-op (self-contained) |
 
 ### Per-Org Layer Stack
@@ -449,11 +449,13 @@ Vendoring commit messages use title + body (upload and stale delete). `github st
 │  ┌──────────────────────────────────────────┐                   │
 │  │ bootstrapSandbox()                       │                   │
 │  │                                          │                   │
-│  │  Upload to /sandbox/workspace:           │                   │
+│  │  UploadDir (tar) to /sandbox/workspace:  │                   │
 │  │  ├── fullsend binary (cross-compiled)    │                   │
-│  │  ├── agent definition file               │                   │
 │  │  ├── skills/ directory                   │                   │
-│  │  ├── plugins/ directory                  │                   │
+│  │  └── plugins/ directory                  │                   │
+│  │                                          │                   │
+│  │  Upload (single file):                   │                   │
+│  │  ├── agent definition file               │                   │
 │  │  ├── host_files (expanded ${VAR} paths)  │                   │
 │  │  ├── .env file (bootstrapEnv)            │                   │
 │  │  └── security hooks                      │                   │
@@ -467,12 +469,13 @@ Vendoring commit messages use title + body (upload and stale delete). `github st
 │  │  ├── sources .env.d/*.env files          │                   │
 │  │  └── sources .fullsend/iteration.env     │                   │
 │  │      (FULLSEND_TIMEOUT_MINUTES +         │                   │
-│  │       FULLSEND_ITERATION_DEADLINE,       │                   │
-│  │       rewritten before every iteration)  │                   │
+│  │       FULLSEND_ITERATION_DEADLINE +      │                   │
+│  │       TRACEPARENT, rewritten before      │                   │
+│  │       every iteration)                   │                   │
 │  └──────────┬───────────────────────────────┘                   │
 │             ▼                                                   │
 │  ┌──────────────────┐                                           │
-│  │ Copy source code  │ Upload target repo to sandbox            │
+│  │ Copy source code  │ UploadDir() tar of target repo           │
 │  └──────┬───────────┘                                           │
 │         ▼                                                       │
 │  ┌──────────────────┐                                           │
@@ -516,7 +519,7 @@ Vendoring commit messages use title + body (upload and stale delete). `github st
 │  │ for i := 1; i <= max_iterations; i++ {   │                   │
 │  │   if i > 1: ClearIterationArtifacts      │                   │
 │  │     (sweep stray processes, clear output)│                   │
-│  │   write .fullsend/iteration.env deadline │                   │
+│  │   write iteration.env incl. TRACEPARENT  │                   │
 │  │   run agent                              │                   │
 │  │   if killed at timeout: sweep stray      │                   │
 │  │     processes (agent still runs, #7042)  │                   │
@@ -556,9 +559,11 @@ Vendoring commit messages use title + body (upload and stale delete). `github st
 │  │                   │ instead of pushing (known limitation,    │
 │  │                   │ see #5393).                              │
 │  │                   │                                          │
-│  │                   │ FULLSEND_VALIDATED_ITERATION_DIR points  │
-│  │                   │ to the validated iteration's output dir, │
-│  │                   │ for forward compatibility. The scaffold- │
+│  │                   │ FULLSEND_VALIDATED_ITERATION_DIR is an   │
+│  │                   │ absolute path to the validated           │
+│  │                   │ iteration's output dir (independent of   │
+│  │                   │ cwd / a relative --output-dir), for      │
+│  │                   │ forward compatibility. The scaffold-     │
 │  │                   │ embedded post-scripts don't consume it   │
 │  │                   │ yet (tracked in fullsend-ai/agents#411)  │
 │  │                   │ — they still scan for the last iteration │
@@ -599,6 +604,7 @@ details, see [Agent runtimes](../../runtimes.md).
 | `Exec()` | `openshell sandbox exec ...` | Run command in sandbox |
 | `ExecStreamReader()` | `openshell sandbox exec ...` | Streaming stdout reader |
 | `Upload()` | `openshell sandbox upload ...` | Copy files into sandbox |
+| `UploadDir()` | tar -czf + Upload + Exec extract | Copy directory preserving symlinks |
 | `Download()` | `openshell sandbox download ...` | Copy files out of sandbox |
 | `SafeDownload()` | Download + sanitize | Remove dangerous symlinks (absolute or repo-escaping), .git/hooks |
 | `CollectLogs()` | Download logs dir | Extract sandbox logs |
