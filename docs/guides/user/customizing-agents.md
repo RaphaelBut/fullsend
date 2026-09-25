@@ -558,10 +558,13 @@ disables nothing because no agent has that harness name.
 By default, fullsend checks the forge's permission API to decide who can
 trigger agents. Users with `write` or above can trigger all agents; users
 with `triage` can trigger observation agents (`/fs-triage`, `/fs-review`)
-only. This applies to slash commands, label-triggered dispatch, and
-event-triggered dispatch alike. See the
+only. This triage-level access applies to **GitHub webhook dispatch** (slash
+commands, label-triggered dispatch, and event-triggered dispatch). The Go
+poll path used for GitLab and Jira currently requires `write` for all
+agents — it does not yet distinguish observation from mutation thresholds.
+See the
 [Authorization Contract](../../normative/authorization/v1/README.md) for the
-full role hierarchy and exception rules.
+full role hierarchy, exception rules, and implementation notes.
 
 ### Extending authorization with OWNERS files
 
@@ -617,8 +620,10 @@ trigger agents without needing direct collaborator roles on the forge.
 
 OWNERS can only **raise** a user's effective role, never lower it. Users not
 found in OWNERS fall through to the forge's permission API. The OWNERS file
-is read from the **base branch** (for PR events) or the **default branch**
-(otherwise), so a PR author cannot add themselves.
+is read from a trusted ref so that PR authors cannot add themselves:
+`pull_request_target` and `pull_request_review` events use the PR's
+**base-branch SHA**; all other events — including slash commands posted on a
+PR (`issue_comment`) — use the **default branch**.
 
 For edge cases (parse failures, alias restrictions, character validation),
 see the
