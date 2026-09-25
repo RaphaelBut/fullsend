@@ -561,7 +561,8 @@ with `triage` can trigger observation agents (`/fs-triage`, `/fs-review`)
 only. This triage-level access applies to **GitHub webhook dispatch** (slash
 commands, label-triggered dispatch, and event-triggered dispatch). The Go
 poll path used for GitLab and Jira currently requires `write` for all
-agents — it does not yet distinguish observation from mutation thresholds.
+non-exception transitions — it does not yet distinguish observation from
+mutation thresholds.
 See the
 [Authorization Contract](../../normative/authorization/v1/README.md) for the
 full role hierarchy, exception rules, and implementation notes.
